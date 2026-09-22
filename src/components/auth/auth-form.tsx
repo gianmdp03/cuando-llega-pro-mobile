@@ -18,7 +18,6 @@ export function AuthForm({ mode, error, isSubmitting, onSubmit }: AuthFormProps)
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
   const isRegister = mode === 'register';
-  const fieldErrors = error instanceof ProblemDetailError ? error.problem.errors : undefined;
 
   function submit(): void {
     onSubmit({

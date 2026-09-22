@@ -8,14 +8,16 @@ import type {
 } from '@/src/types/api';
 
 const TRANSIT_PATH = '/api/v1/transit/lines';
+const MGP_PACED_TIMEOUT_MS = 90_000;
 
 export function getTransitLines(): Promise<TransitLineDTO[]> {
-  return apiClient.get<TransitLineDTO[]>(TRANSIT_PATH);
+  return apiClient.get<TransitLineDTO[]>(TRANSIT_PATH, { timeoutMs: MGP_PACED_TIMEOUT_MS });
 }
 
 export function getTransitStreets(commercialLineCode: string): Promise<TransitStreetDTO[]> {
   return apiClient.get<TransitStreetDTO[]>(
-    `${TRANSIT_PATH}/${encodeURIComponent(commercialLineCode)}/streets`
+    `${TRANSIT_PATH}/${encodeURIComponent(commercialLineCode)}/streets`,
+    { timeoutMs: MGP_PACED_TIMEOUT_MS }
   );
 }
 
@@ -24,7 +26,8 @@ export function getTransitIntersections(
   streetCode: string
 ): Promise<TransitIntersectionDTO[]> {
   return apiClient.get<TransitIntersectionDTO[]>(
-    `${TRANSIT_PATH}/${encodeURIComponent(commercialLineCode)}/streets/${encodeURIComponent(streetCode)}/intersections`
+    `${TRANSIT_PATH}/${encodeURIComponent(commercialLineCode)}/streets/${encodeURIComponent(streetCode)}/intersections`,
+    { timeoutMs: MGP_PACED_TIMEOUT_MS }
   );
 }
 
@@ -34,7 +37,8 @@ export function getTransitStopsWithFlag(
   intersectionCode: string
 ): Promise<TransitStopWithFlagDTO[]> {
   return apiClient.get<TransitStopWithFlagDTO[]>(
-    `${TRANSIT_PATH}/${encodeURIComponent(commercialLineCode)}/streets/${encodeURIComponent(streetCode)}/intersections/${encodeURIComponent(intersectionCode)}/stops`
+    `${TRANSIT_PATH}/${encodeURIComponent(commercialLineCode)}/streets/${encodeURIComponent(streetCode)}/intersections/${encodeURIComponent(intersectionCode)}/stops`,
+    { timeoutMs: MGP_PACED_TIMEOUT_MS }
   );
 }
 
@@ -49,5 +53,10 @@ export function getArrivals(
     ...(bandera ? [`bandera=${encodeURIComponent(bandera)}`] : []),
   ].join('&');
 
-  return apiClient.get<ArrivalResponseDTO>(`/api/v1/telemetry/arrivals?${query}`);
+  // A globally paced upstream request can wait behind other users. Keep this
+  // above the maximum expected queue time so a valid eventual response is not
+  // presented as a mobile network error.
+  return apiClient.get<ArrivalResponseDTO>(`/api/v1/telemetry/arrivals?${query}`, {
+    timeoutMs: MGP_PACED_TIMEOUT_MS,
+  });
 }

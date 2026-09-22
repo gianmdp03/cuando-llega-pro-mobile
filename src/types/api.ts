@@ -15,7 +15,7 @@ export type ProblemFieldError = {
   message: string;
 };
 
-export type TelemetryStatus = 'LIVE' | 'ESTIMATED_FALLBACK' | 'EXPIRED';
+export type TelemetryStatus = 'LIVE' | 'ESTIMATED_FALLBACK' | 'EXPIRED' | 'UNAVAILABLE';
 
 export type BusArrival = {
   lineCode: string | null;
@@ -256,6 +256,7 @@ export type DashboardPresetDTO = {
   bandera: string | null;
   config: PresetConfig;
   telemetry: ArrivalResponseDTO;
+  error: string | null;
 };
 
 export type DashboardDTO = {

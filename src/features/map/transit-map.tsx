@@ -453,7 +453,8 @@ function MapStopArrivals({
     queryFn: () => getArrivals(direction.nameTransitLine, stopIdentifier, direction.direction),
     staleTime: 15_000,
     gcTime: 5 * 60_000,
-    retry: 1,
+    // Arrival requests may wait in the global MGP queue; don't submit another automatically.
+    retry: 0,
   });
   const arrivals = arrivalsQuery.data?.arrivals ?? [];
 

@@ -6,6 +6,8 @@ import type {
   PresetRequestDTO,
 } from '@/src/types/api';
 
+const MGP_PACED_TIMEOUT_MS = 90_000;
+
 export function getPresets(): Promise<PresetListDTO[]> {
   return apiClient.get<PresetListDTO[]>('/api/v1/presets');
 }
@@ -30,5 +32,5 @@ export function deletePreset(id: number): Promise<void> {
 }
 
 export function getDashboard(): Promise<DashboardDTO> {
-  return apiClient.get<DashboardDTO>('/api/v1/me/dashboard');
+  return apiClient.get<DashboardDTO>('/api/v1/me/dashboard', { timeoutMs: MGP_PACED_TIMEOUT_MS });
 }

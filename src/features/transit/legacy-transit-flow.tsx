@@ -36,7 +36,8 @@ type Selection = {
   stop?: TransitStopWithFlagDTO;
 };
 
-const CATALOG_OPTIONS = { staleTime: 5 * 60_000, gcTime: 30 * 60_000, retry: 1 } as const;
+// These endpoints can need MGP on a cache miss. The user explicitly controls retries.
+const CATALOG_OPTIONS = { staleTime: 5 * 60_000, gcTime: 30 * 60_000, retry: 0 } as const;
 
 export function LegacyTransitFlow() {
   const [selection, setSelection] = useState<Selection>({});
@@ -303,7 +304,7 @@ function ArrivalsStep({
     queryFn: () => getArrivals(line.codigo, stop.identificador, stop.abreviaturaBandera),
     staleTime: 15_000,
     gcTime: 5 * 60_000,
-    retry: 1,
+    retry: 0,
   });
 
   const quickSwitchFooter = (

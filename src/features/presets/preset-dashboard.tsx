@@ -32,7 +32,8 @@ import type {
   PresetRequestDTO,
 } from '@/src/types/api';
 
-const DASHBOARD_OPTIONS = { staleTime: 15_000, gcTime: 5 * 60_000, retry: 1 } as const;
+const DASHBOARD_OPTIONS = { staleTime: 15_000, gcTime: 5 * 60_000, retry: 0 } as const;
+const PRESET_OPTIONS = { staleTime: 15_000, gcTime: 5 * 60_000, retry: 1 } as const;
 
 export function PresetDashboard() {
   const [editingId, setEditingId] = useState<number | null | undefined>(undefined);
@@ -44,7 +45,7 @@ export function PresetDashboard() {
   const presetsQuery = useQuery({
     queryKey: queryKeys.presets.all(),
     queryFn: getPresets,
-    ...DASHBOARD_OPTIONS,
+    ...PRESET_OPTIONS,
   });
   const deleteMutation = useMutation({
     mutationFn: deletePreset,
@@ -141,7 +142,9 @@ function DashboardCard({
       </View>
       <View className="mt-4 border-t border-[#28282C] pt-3">
         <Text className="text-sm font-semibold text-[#A4A4AB]">{preset.telemetry.status}</Text>
-        {preset.telemetry.arrivals.length === 0 ? (
+        {preset.error ? (
+          <Text className="mt-2 text-sm text-[#E5B842]">{preset.error}</Text>
+        ) : preset.telemetry.arrivals.length === 0 ? (
           <Text className="mt-2 text-sm text-[#A4A4AB]">Sin coches próximos.</Text>
         ) : (
           preset.telemetry.arrivals.map((arrival) => (
@@ -177,7 +180,7 @@ function PresetEditor({ id, onClose }: { id: number | null; onClose: () => void 
     queryKey: queryKeys.presets.detail(id ?? 0),
     queryFn: () => getPreset(id!),
     enabled: id !== null,
-    ...DASHBOARD_OPTIONS,
+    ...PRESET_OPTIONS,
   });
   const [draft, setDraft] = useState<Partial<PresetRequestDTO>>({});
   const baseForm = detailQuery.data ?? null;

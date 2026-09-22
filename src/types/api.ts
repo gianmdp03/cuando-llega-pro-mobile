@@ -68,6 +68,14 @@ export type MapStop = {
   longitude: number | null;
 };
 
+/** Official MGP road geometry. Coordinates are [longitude, latitude]. */
+export type MapRoute = {
+  id: string;
+  branch: string;
+  description: string | null;
+  coordinates: [number, number][];
+};
+
 export type MapStopDirection = {
   codeTransitLine: string;
   nameTransitLine: string;

@@ -1,5 +1,5 @@
 import { apiClient } from '@/src/lib/api-client';
-import type { DirectionDto, MapLine, MapStop, MapStopDetail } from '@/src/types/api';
+import type { DirectionDto, MapLine, MapRoute, MapStop, MapStopDetail } from '@/src/types/api';
 
 const MAP_PATH = '/api/v1/transit/map';
 
@@ -16,6 +16,12 @@ export function getMapDirections(commercialCode: string): Promise<DirectionDto[]
 export function getMapStops(commercialCode: string, direction: string): Promise<MapStop[]> {
   return apiClient.get<MapStop[]>(
     `${MAP_PATH}/lines/${encodeURIComponent(commercialCode)}/stops?direction=${encodeURIComponent(direction)}`
+  );
+}
+
+export function getMapRoutes(commercialCode: string): Promise<MapRoute[]> {
+  return apiClient.get<MapRoute[]>(
+    `${MAP_PATH}/lines/${encodeURIComponent(commercialCode)}/routes`
   );
 }
 

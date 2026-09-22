@@ -1,7 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ActivityIndicator, Text, View } from 'react-native';
-
-import BottomSheet from '@gorhom/bottom-sheet';
+import { ActivityIndicator, Modal, Pressable, ScrollView, Text, View } from 'react-native';
 import {
   Camera,
   GeoJSONSource,
@@ -16,11 +14,24 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Picker } from '@react-native-picker/picker';
 import { useQuery } from '@tanstack/react-query';
 
-import { getMapDirections, getMapLines, getMapStop, getMapStops } from '@/src/features/map/api';
-import { useStopArrivalsStream } from '@/src/features/map/use-stop-arrivals-stream';
+import {
+  getMapDirections,
+  getMapLines,
+  getMapRoutes,
+  getMapStop,
+  getMapStops,
+} from '@/src/features/map/api';
+import { getArrivals } from '@/src/features/transit/api';
 import { useArrivalTicker } from '@/src/features/transit/use-arrival-ticker';
 import { queryKeys } from '@/src/lib/query-client';
-import type { BusArrival, MapLine, MapStop } from '@/src/types/api';
+import type {
+  BusArrival,
+  MapLine,
+  MapRoute,
+  MapStop,
+  MapStopDetail,
+  MapStopDirection,
+} from '@/src/types/api';
 
 const INITIAL_CAMERA: InitialViewState = { center: [-57.5426, -38.0055], zoom: 12 };
 const OSM_STYLE = {
@@ -64,20 +75,31 @@ export function TransitMap() {
     enabled: !!line && !!direction,
     ...CATALOG_OPTIONS,
   });
+  const routesQuery = useQuery({
+    queryKey: queryKeys.map.routes(line?.name ?? ''),
+    queryFn: () => getMapRoutes(line!.name),
+    enabled: !!line,
+    ...CATALOG_OPTIONS,
+  });
   const stopQuery = useQuery({
     queryKey: queryKeys.map.stop(stop?.identifier ?? ''),
     queryFn: () => getMapStop(stop!.identifier),
     enabled: !!stop,
     ...CATALOG_OPTIONS,
   });
-  const stream = useStopArrivalsStream(stopQuery.data, !!stop && !!stopQuery.data);
   const markers = useMemo(
     () =>
       (stopsQuery.data ?? []).filter((item) => item.latitude !== null && item.longitude !== null),
     [stopsQuery.data]
   );
-  const routeLine = useMemo(() => createStopsLine(markers), [markers]);
-  const routeArrow = useMemo(() => createRouteArrow(routeLine), [routeLine]);
+  const routeLines = useMemo(
+    () =>
+      (routesQuery.data ?? [])
+        .filter((route) => routeMatchesDirection(route, direction))
+        .map(createRouteLine)
+        .filter((route): route is RenderedRoute => route !== null),
+    [direction, routesQuery.data]
+  );
 
   return (
     <View className="flex-1 bg-[#121212]">
@@ -86,36 +108,34 @@ export function TransitMap() {
         attribution={false}
         logo={false}
         mapStyle={OSM_STYLE}
+        onPress={(event) => {
+          const selected = findStopAtTap(event.nativeEvent.lngLat, markers);
+          if (selected) setStop(selected);
+        }}
         style={{ flex: 1 }}>
         <Camera initialViewState={INITIAL_CAMERA} maxZoom={19} minZoom={1} />
-        {routeLine ? (
-          <GeoJSONSource data={routeLine} id="transit-route">
+        {routeLines.map(({ id, line }) => (
+          <GeoJSONSource data={line} id={`transit-route-${id}`} key={id}>
             <Layer
-              id="transit-route-line"
+              id={`transit-route-line-${id}`}
               paint={{ 'line-color': '#1976A8', 'line-opacity': 0.9, 'line-width': 4 }}
-              source="transit-route"
+              source={`transit-route-${id}`}
               type="line"
             />
           </GeoJSONSource>
-        ) : null}
-        {routeArrow ? (
-          <Marker id="transit-route-direction" lngLat={routeArrow.lngLat}>
-            <View
-              style={{
-                alignItems: 'center',
-                backgroundColor: '#1E1E24',
-                borderColor: '#80D4FF',
-                borderRadius: 14,
-                borderWidth: 2,
-                height: 28,
-                justifyContent: 'center',
-                transform: [{ rotate: `${routeArrow.bearing}deg` }],
-                width: 28,
-              }}>
-              <MaterialCommunityIcons color="#80D4FF" name="arrow-right-bold" size={16} />
-            </View>
-          </Marker>
-        ) : null}
+        ))}
+        {routeLines.flatMap(({ id, arrows }) =>
+          arrows.map((arrow, index) => (
+            <Marker
+              id={`transit-route-arrow-${id}-${index}`}
+              key={`${id}-${index}`}
+              lngLat={arrow.lngLat}>
+              <View style={{ transform: [{ rotate: `${arrow.bearing - 90}deg` }] }}>
+                <MaterialCommunityIcons color="#101114" name="arrow-right-bold" size={38} />
+              </View>
+            </Marker>
+          ))
+        )}
         {markers.map((item) => (
           <Marker
             id={item.identifier}
@@ -128,13 +148,13 @@ export function TransitMap() {
                 alignItems: 'center',
                 backgroundColor: '#1E1E24',
                 borderColor: '#80D4FF',
-                borderRadius: 16,
-                borderWidth: 2,
-                height: 32,
+                borderRadius: 20,
+                borderWidth: 3,
+                height: 40,
                 justifyContent: 'center',
-                width: 32,
+                width: 40,
               }}>
-              <MaterialCommunityIcons color="#80D4FF" name="bus-stop" size={18} />
+              <MaterialCommunityIcons color="#80D4FF" name="bus-stop" size={21} />
             </View>
           </Marker>
         ))}
@@ -186,7 +206,10 @@ export function TransitMap() {
             </Picker>
           </>
         ) : null}
-        {linesQuery.isError || directionsQuery.isError || stopsQuery.isError ? (
+        {linesQuery.isError ||
+        directionsQuery.isError ||
+        stopsQuery.isError ||
+        routesQuery.isError ? (
           <Text className="mt-2 text-xs text-[#E5B842]">
             No se pudo cargar el catálogo. Reintentá cambiando la selección.
           </Text>
@@ -196,7 +219,12 @@ export function TransitMap() {
         © OpenStreetMap contributors
       </Text>
       {stop ? (
-        <StopSheet isLoading={stopQuery.isPending} onClose={() => setStop(null)} stream={stream} />
+        <StopSheet
+          key={stop.identifier}
+          detail={stopQuery.data}
+          isLoading={stopQuery.isPending}
+          onClose={() => setStop(null)}
+        />
       ) : null}
     </View>
   );
@@ -209,98 +237,265 @@ type RouteLine = {
 };
 
 type RouteArrow = { lngLat: LngLat; bearing: number };
+type RenderedRoute = { id: string; line: RouteLine; arrows: RouteArrow[] };
 
-function createStopsLine(stops: MapStop[]): RouteLine | null {
-  const coordinates = stops.map((stop) => [stop.longitude!, stop.latitude!] as LngLat);
+const ROUTE_ARROW_SPACING_METERS = 400;
+const STOP_TAP_RADIUS_METERS = 65;
+
+function routeMatchesDirection(route: MapRoute, direction: string | null): boolean {
+  if (!direction) {
+    return false;
+  }
+
+  // MGP encodes its route description as "code;short destination;long destination".
+  // Match complete fields, never a substring such as "FARO" inside another destination.
+  return (route.description ?? '').split(';').some((field) => field.trim() === direction);
+}
+
+function createRouteLine(route: MapRoute): RenderedRoute | null {
+  const coordinates = route.coordinates.map(
+    ([longitude, latitude]) => [longitude, latitude] as LngLat
+  );
 
   return coordinates.length > 1
-    ? { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates } }
+    ? {
+        id: route.id,
+        line: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates } },
+        arrows: createRouteArrows(coordinates),
+      }
     : null;
 }
 
-function createRouteArrow(routeLine: RouteLine | null): RouteArrow | null {
-  if (!routeLine) {
-    return null;
+function findStopAtTap(lngLat: LngLat, stops: MapStop[]): MapStop | null {
+  let nearest: MapStop | null = null;
+  let nearestDistance = STOP_TAP_RADIUS_METERS;
+  for (const stop of stops) {
+    if (stop.longitude === null || stop.latitude === null) continue;
+    const distance = distanceMeters(lngLat, [stop.longitude, stop.latitude]);
+    if (distance <= nearestDistance) {
+      nearest = stop;
+      nearestDistance = distance;
+    }
+  }
+  return nearest;
+}
+
+function createRouteArrows(coordinates: LngLat[]): RouteArrow[] {
+  const arrows: RouteArrow[] = [];
+  let distanceSinceLastArrow = 0;
+
+  for (let index = 0; index < coordinates.length - 1; index += 1) {
+    const start = coordinates[index];
+    const end = coordinates[index + 1];
+    const segmentMeters = distanceMeters(start, end);
+    if (segmentMeters === 0) {
+      continue;
+    }
+
+    const bearing = bearingDegrees(start, end);
+    let traversedMeters = 0;
+    while (
+      distanceSinceLastArrow + (segmentMeters - traversedMeters) >=
+      ROUTE_ARROW_SPACING_METERS
+    ) {
+      const metersToArrow = ROUTE_ARROW_SPACING_METERS - distanceSinceLastArrow;
+      traversedMeters += metersToArrow;
+      const fraction = traversedMeters / segmentMeters;
+      arrows.push({
+        lngLat: [
+          start[0] + (end[0] - start[0]) * fraction,
+          start[1] + (end[1] - start[1]) * fraction,
+        ],
+        bearing,
+      });
+      distanceSinceLastArrow = 0;
+    }
+    distanceSinceLastArrow += segmentMeters - traversedMeters;
   }
 
-  const coordinates = routeLine.geometry.coordinates;
-  const segmentIndex = Math.floor((coordinates.length - 1) / 2);
-  const start = coordinates[segmentIndex];
-  const end = coordinates[segmentIndex + 1];
-  const startLatitude = (start[1] * Math.PI) / 180;
-  const endLatitude = (end[1] * Math.PI) / 180;
-  const longitudeDelta = ((end[0] - start[0]) * Math.PI) / 180;
-  const bearingRadians = Math.atan2(
-    Math.sin(longitudeDelta) * Math.cos(endLatitude),
-    Math.cos(startLatitude) * Math.sin(endLatitude) -
-      Math.sin(startLatitude) * Math.cos(endLatitude) * Math.cos(longitudeDelta)
-  );
+  return arrows;
+}
 
-  return {
-    lngLat: [(start[0] + end[0]) / 2, (start[1] + end[1]) / 2],
-    bearing: ((bearingRadians * 180) / Math.PI + 360) % 360,
-  };
+function distanceMeters(
+  [startLongitude, startLatitude]: LngLat,
+  [endLongitude, endLatitude]: LngLat
+): number {
+  const earthRadiusMeters = 6_371_000;
+  const latitudeDelta = radians(endLatitude - startLatitude);
+  const longitudeDelta = radians(endLongitude - startLongitude);
+  const startLatitudeRadians = radians(startLatitude);
+  const endLatitudeRadians = radians(endLatitude);
+  const a =
+    Math.sin(latitudeDelta / 2) ** 2 +
+    Math.cos(startLatitudeRadians) *
+      Math.cos(endLatitudeRadians) *
+      Math.sin(longitudeDelta / 2) ** 2;
+  return 2 * earthRadiusMeters * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function bearingDegrees(
+  [startLongitude, startLatitude]: LngLat,
+  [endLongitude, endLatitude]: LngLat
+): number {
+  const longitudeDelta = radians(endLongitude - startLongitude);
+  const startLatitudeRadians = radians(startLatitude);
+  const endLatitudeRadians = radians(endLatitude);
+  const radiansBearing = Math.atan2(
+    Math.sin(longitudeDelta) * Math.cos(endLatitudeRadians),
+    Math.cos(startLatitudeRadians) * Math.sin(endLatitudeRadians) -
+      Math.sin(startLatitudeRadians) * Math.cos(endLatitudeRadians) * Math.cos(longitudeDelta)
+  );
+  return (degrees(radiansBearing) + 360) % 360;
+}
+
+function radians(degreesValue: number): number {
+  return (degreesValue * Math.PI) / 180;
+}
+
+function degrees(radiansValue: number): number {
+  return (radiansValue * 180) / Math.PI;
 }
 
 function StopSheet({
+  detail,
   isLoading,
   onClose,
-  stream,
 }: {
+  detail: MapStopDetail | undefined;
   isLoading: boolean;
   onClose: () => void;
-  stream: ReturnType<typeof useStopArrivalsStream>;
 }) {
+  const [selectedDirection, setSelectedDirection] = useState<MapStopDirection | null>(null);
+
   return (
-    <BottomSheet
-      backgroundStyle={{ backgroundColor: '#1E1E24' }}
-      enablePanDownToClose
-      index={0}
-      onClose={onClose}
-      snapPoints={['45%', '82%']}>
-      <View className="flex-1 px-5 pt-2">
-        <Text className="text-xl font-bold text-[#E1E1E6]">Arribos</Text>
-        {isLoading || stream.isConnecting ? (
-          <View className="mt-6 items-center">
-            <ActivityIndicator color="#80D4FF" />
-          </View>
-        ) : null}
-        {stream.error ? (
-          <Text className="mt-4 text-sm text-[#E5B842]">{stream.error.message}</Text>
-        ) : null}
-        {stream.data?.lines.length === 0 && !stream.isConnecting ? (
-          <Text className="mt-4 text-base text-[#A4A4AB]">Esperando arribos por línea.</Text>
-        ) : null}
-        {stream.data?.lines.map((line) => (
-          <View className="mt-4 rounded-xl bg-[#25252B] p-3" key={line.lineCode}>
-            <View className="flex-row items-center justify-between">
-              <Text className="font-semibold text-[#E1E1E6]">Línea {line.lineCode}</Text>
-              <Text className="text-sm text-[#A4A4AB]">{line.status}</Text>
-            </View>
-            {line.status === 'UNAVAILABLE' ? (
-              <Text className="mt-2 text-sm text-[#8E8E93]">
-                {line.error ?? 'Sin información disponible.'}
-              </Text>
+    <Modal animationType="slide" onRequestClose={onClose} transparent visible>
+      <View className="flex-1 justify-end">
+        <Pressable
+          accessibilityLabel="Cerrar arribos"
+          accessibilityRole="button"
+          className="absolute inset-0 bg-black/40"
+          onPress={onClose}
+        />
+        <View className="max-h-[82%] min-h-[45%] rounded-t-3xl bg-[#1E1E24] px-5 pb-8 pt-5">
+          <ScrollView contentContainerStyle={{ paddingBottom: 12 }}>
+            {isLoading ? (
+              <View className="mt-6 items-center">
+                <ActivityIndicator color="#80D4FF" />
+              </View>
+            ) : selectedDirection && detail ? (
+              <MapStopArrivals
+                direction={selectedDirection}
+                onBack={() => setSelectedDirection(null)}
+                stopIdentifier={detail.identifier}
+              />
+            ) : detail ? (
+              <StopLinesList detail={detail} onSelect={setSelectedDirection} />
             ) : (
-              line.directions
-                .flatMap((direction) => direction.arrivals)
-                .map((arrival) => (
-                  <StreamArrivalRow
-                    arrival={arrival}
-                    key={
-                      arrival.vehicleUnit ?? `${arrival.lineCode}:${arrival.estimatedArrivalTime}`
-                    }
-                  />
-                ))
+              <Text className="mt-4 text-sm text-[#E5B842]">No se pudo cargar la parada.</Text>
             )}
-          </View>
-        ))}
+          </ScrollView>
+        </View>
       </View>
-    </BottomSheet>
+    </Modal>
   );
 }
 
-function StreamArrivalRow({ arrival }: { arrival: BusArrival }) {
+function StopLinesList({
+  detail,
+  onSelect,
+}: {
+  detail: MapStopDetail;
+  onSelect: (direction: MapStopDirection) => void;
+}) {
+  const directions = [...detail.directions].sort(
+    (left, right) =>
+      left.nameTransitLine.localeCompare(right.nameTransitLine) ||
+      left.direction.localeCompare(right.direction)
+  );
+  return (
+    <>
+      <Text className="text-xl font-bold text-[#E1E1E6]">Parada</Text>
+      <Text className="mt-1 text-sm text-[#A4A4AB]">
+        Elegí un colectivo para consultar arribos.
+      </Text>
+      {directions.map((direction) => (
+        <Pressable
+          className="mt-4 rounded-xl bg-[#25252B] p-4 active:opacity-70"
+          key={`${direction.codeTransitLine}:${direction.direction}`}
+          onPress={() => onSelect(direction)}>
+          <Text className="text-lg font-semibold text-[#E1E1E6]">
+            Línea {direction.nameTransitLine}
+          </Text>
+          <Text className="mt-1 text-sm text-[#80D4FF]">
+            {direction.expandedDirection ?? direction.direction}
+          </Text>
+        </Pressable>
+      ))}
+    </>
+  );
+}
+
+function MapStopArrivals({
+  direction,
+  onBack,
+  stopIdentifier,
+}: {
+  direction: MapStopDirection;
+  onBack: () => void;
+  stopIdentifier: string;
+}) {
+  const arrivalsQuery = useQuery({
+    queryKey: queryKeys.telemetry.arrivals(
+      direction.nameTransitLine,
+      stopIdentifier,
+      direction.direction
+    ),
+    queryFn: () => getArrivals(direction.nameTransitLine, stopIdentifier, direction.direction),
+    staleTime: 15_000,
+    gcTime: 5 * 60_000,
+    retry: 1,
+  });
+  const arrivals = arrivalsQuery.data?.arrivals ?? [];
+
+  return (
+    <>
+      <View className="flex-row items-center justify-between">
+        <Pressable accessibilityLabel="Volver a colectivos" onPress={onBack}>
+          <MaterialCommunityIcons color="#80D4FF" name="arrow-left" size={26} />
+        </Pressable>
+        <Pressable
+          accessibilityLabel="Actualizar arribos"
+          disabled={arrivalsQuery.isFetching}
+          onPress={() => void arrivalsQuery.refetch()}>
+          <MaterialCommunityIcons color="#80D4FF" name="refresh" size={26} />
+        </Pressable>
+      </View>
+      <Text className="mt-4 text-xl font-bold text-[#E1E1E6]">
+        Línea {direction.nameTransitLine}
+      </Text>
+      <Text className="mt-1 text-sm text-[#80D4FF]">
+        {direction.expandedDirection ?? direction.direction}
+      </Text>
+      {arrivalsQuery.isPending ? <ActivityIndicator className="mt-8" color="#80D4FF" /> : null}
+      {arrivalsQuery.isError ? (
+        <Text className="mt-4 text-sm text-[#E5B842]">No se pudieron consultar los arribos.</Text>
+      ) : null}
+      {!arrivalsQuery.isPending && !arrivalsQuery.isError && arrivals.length === 0 ? (
+        <Text className="mt-5 text-sm text-[#A4A4AB]">
+          No hay arribos próximos para este sentido.
+        </Text>
+      ) : null}
+      {arrivals.map((arrival) => (
+        <ArrivalRow
+          arrival={arrival}
+          key={arrival.vehicleUnit ?? `${arrival.lineCode}:${arrival.estimatedArrivalTime}`}
+        />
+      ))}
+    </>
+  );
+}
+
+function ArrivalRow({ arrival }: { arrival: BusArrival }) {
   const visualMinutes = useArrivalTicker(arrival);
   const eta =
     arrival.status === 'EXPIRED' || visualMinutes === null

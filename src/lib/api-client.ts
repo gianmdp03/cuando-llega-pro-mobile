@@ -57,10 +57,7 @@ type UnauthorizedHandler = () => Promise<void> | void;
 let unauthorizedHandler: UnauthorizedHandler | undefined;
 let unauthorizedCleanup: Promise<void> | undefined;
 
-/**
- * Registers lifecycle work owned by the app shell, such as closing SSE streams
- * and redirecting to the public route group. Replaces any prior handler.
- */
+/** Registers lifecycle work owned by the app shell before redirecting to the public route group. */
 export function setUnauthorizedHandler(handler: UnauthorizedHandler | undefined): void {
   unauthorizedHandler = handler;
 }
@@ -153,45 +150,7 @@ export const apiClient = {
   ) => apiRequest<TResponse, TBody>(path, { ...options, method: 'PUT', body }),
   delete: <TResponse = void>(path: string, options?: Omit<ApiRequestOptions, 'method' | 'body'>) =>
     apiRequest<TResponse>(path, { ...options, method: 'DELETE' }),
-  openSseStream,
 };
-
-/** Opens an authenticated SSE response. Stream lifecycle belongs to the caller. */
-export async function openSseStream(path: string, signal: AbortSignal): Promise<Response> {
-  try {
-    const token = await getAuthToken();
-    const headers = new Headers({ Accept: 'text/event-stream' });
-
-    if (token) {
-      headers.set('Authorization', `Bearer ${token}`);
-    }
-
-    const response = await fetch(buildUrl(path), { headers, signal });
-    if (!response.ok) {
-      const problem = await readProblemDetail(response);
-      if (response.status === 401) {
-        await handleUnauthorized();
-      }
-      throw new ProblemDetailError(problem);
-    }
-
-    if (!response.body) {
-      throw new ApiNetworkError(new Error('The SSE response did not include a readable body.'));
-    }
-
-    return response;
-  } catch (error) {
-    if (
-      error instanceof ProblemDetailError ||
-      error instanceof ApiConfigurationError ||
-      error instanceof ApiNetworkError
-    ) {
-      throw error;
-    }
-
-    throw new ApiNetworkError(error);
-  }
-}
 
 function buildUrl(path: string): string {
   const baseUrl = process.env.EXPO_PUBLIC_API_BASE_URL?.replace(/\/+$/, '');

@@ -304,8 +304,6 @@ function ArrivalsStep({
     staleTime: 15_000,
     gcTime: 5 * 60_000,
     retry: 1,
-    refetchInterval: 20_000,
-    refetchIntervalInBackground: false,
   });
 
   const quickSwitchFooter = (
@@ -328,6 +326,17 @@ function ArrivalsStep({
       onBack={onBack}
       subtitle={stop.abreviaturaAmpliadaBandera || stop.abreviaturaBandera}
       title={`Línea ${line.codigo}`}>
+      <View className="mb-3 flex-row justify-end">
+        <Pressable
+          accessibilityLabel="Actualizar arribos"
+          accessibilityRole="button"
+          className="flex-row items-center rounded-xl bg-[#25252B] px-3 py-2 active:opacity-70"
+          disabled={query.isFetching}
+          onPress={() => void query.refetch()}>
+          <MaterialCommunityIcons color="#80D4FF" name="refresh" size={18} />
+          <Text className="ml-2 text-sm font-semibold text-[#E1E1E6]">Actualizar</Text>
+        </Pressable>
+      </View>
       <View className="mb-3 flex-row items-center justify-between rounded-2xl bg-[#1E1E24] p-4">
         <View className="flex-1">
           <Text className="text-sm text-[#A4A4AB]">Parada</Text>
@@ -412,9 +421,7 @@ function QuickSwitchPanel({
   // Unique line names that are NOT the current line
   const otherLineNames = [
     ...new Set(
-      directions
-        .filter((d) => d.nameTransitLine !== currentLineCode)
-        .map((d) => d.nameTransitLine)
+      directions.filter((d) => d.nameTransitLine !== currentLineCode).map((d) => d.nameTransitLine)
     ),
   ];
 

@@ -1,73 +1,106 @@
 import '@/global.css';
 
-import { ActionSheetProvider } from '@expo/react-native-action-sheet';
+import { useEffect } from 'react';
+import { Text, View } from 'react-native';
 
-import { ThemeProvider as NavThemeProvider } from 'expo-router/react-navigation';
-import * as Device from 'expo-device';
-import { Link, Stack } from 'expo-router';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { useFonts } from 'expo-font';
+import { Stack, useRouter, useSegments } from 'expo-router';
+import { ThemeProvider as NavigationThemeProvider } from 'expo-router/react-navigation';
+import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { Platform, Pressable } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import { Icon } from '@/components/nativewindui/Icon';
-import { ThemeToggle } from '@/components/nativewindui/ThemeToggle';
-import { cn } from '@/lib/cn';
-import { useColorScheme } from '@/lib/useColorScheme';
+import { setUnauthorizedHandler } from '@/src/lib/api-client';
+import { queryClient } from '@/src/lib/query-client';
+import { AuthProvider, useAuth } from '@/src/providers/auth-provider';
+import { ReactQueryAppState } from '@/src/providers/react-query-app-state';
 import { NAV_THEME } from '@/theme';
 
-export {
-  // Catch any errors thrown by the Layout component.
-  ErrorBoundary,
-} from 'expo-router';
+void SplashScreen.preventAutoHideAsync();
 
-const isIos26 = Platform.select({ default: false, ios: Device.osVersion?.startsWith('26.') });
+export { ErrorBoundary } from 'expo-router';
 
 export default function RootLayout() {
-  const { colorScheme, isDarkColorScheme } = useColorScheme();
+  const [fontsLoaded] = useFonts({ ...MaterialCommunityIcons.font });
+
+  useEffect(() => {
+    if (fontsLoaded) {
+      void SplashScreen.hideAsync();
+    }
+  }, [fontsLoaded]);
+
+  if (!fontsLoaded) {
+    return null;
+  }
 
   return (
-    <>
-      <StatusBar
-        key={`root-status-bar-${isDarkColorScheme ? 'light' : 'dark'}`}
-        style={isDarkColorScheme ? 'light' : 'dark'}
-      />
-      {/* WRAP YOUR APP WITH ANY ADDITIONAL PROVIDERS HERE */}
-      {/* <ExampleProvider> */}
-      <GestureHandlerRootView style={{ flex: 1 }}>
-        <ActionSheetProvider>
-          <NavThemeProvider value={NAV_THEME[colorScheme]}>
-            <Stack>
-              <Stack.Screen name="index" options={INDEX_OPTIONS} />
-              <Stack.Screen name="modal" options={MODAL_OPTIONS} />
-            </Stack>
-          </NavThemeProvider>
-        </ActionSheetProvider>
-      </GestureHandlerRootView>
-      {/* </ExampleProvider> */}
-    </>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <QueryClientProvider client={queryClient}>
+        <ReactQueryAppState>
+          <SafeAreaProvider>
+            <AuthProvider>
+              <NavigationThemeProvider value={NAV_THEME.dark}>
+                <StatusBar style="light" />
+                <RouteProtection>
+                  <Stack screenOptions={{ headerShown: false }}>
+                    <Stack.Screen name="index" />
+                    <Stack.Screen name="(auth)" />
+                    <Stack.Screen name="(app)" />
+                  </Stack>
+                </RouteProtection>
+              </NavigationThemeProvider>
+            </AuthProvider>
+          </SafeAreaProvider>
+        </ReactQueryAppState>
+      </QueryClientProvider>
+    </GestureHandlerRootView>
   );
 }
 
-const INDEX_OPTIONS = {
-  headerLargeTitle: true,
-  headerTransparent: isIos26,
-  title: 'NativewindUI',
-  headerRight: () => <SettingsIcon />,
-} as const;
+function RouteProtection({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
+  const segments = useSegments();
+  const { isRestoring, session, signOut } = useAuth();
 
-function SettingsIcon() {
-  return (
-    <Link href="/modal" asChild>
-      <Pressable className={cn('opacity-80 active:opacity-50', isIos26 && 'px-1.5')}>
-        <Icon name="gearshape" className="text-foreground" />
-      </Pressable>
-    </Link>
-  );
+  useEffect(() => {
+    setUnauthorizedHandler(async () => {
+      await signOut();
+      router.replace('/login');
+    });
+
+    return () => setUnauthorizedHandler(undefined);
+  }, [router, signOut]);
+
+  useEffect(() => {
+    if (isRestoring) {
+      return;
+    }
+
+    const isPublicRoute = segments[0] === '(auth)';
+    const isPrivateRoute = segments[0] === '(app)';
+
+    if (!session && !isPublicRoute) {
+      router.replace('/login');
+    } else if (session && !isPrivateRoute) {
+      router.replace('/lines');
+    }
+  }, [isRestoring, router, segments, session]);
+
+  if (isRestoring) {
+    return <SessionRestoreScreen />;
+  }
+
+  return children;
 }
 
-const MODAL_OPTIONS = {
-  presentation: 'modal',
-  animation: 'fade_from_bottom', // for android
-  title: 'Settings',
-  headerRight: () => <ThemeToggle />,
-} as const;
+function SessionRestoreScreen() {
+  return (
+    <View className="flex-1 items-center justify-center bg-[#121212]">
+      <MaterialCommunityIcons color="#80D4FF" name="bus-clock" size={36} />
+      <Text className="mt-4 text-base text-[#E1E1E6]">Restaurando sesión</Text>
+    </View>
+  );
+}

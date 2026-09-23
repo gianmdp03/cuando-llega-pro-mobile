@@ -1,12 +1,6 @@
-import { useMemo, useSyncExternalStore } from 'react';
+import { useSyncExternalStore } from 'react';
 
 import type { BusArrival } from '@/src/types/api';
-
-export function useArrivalTicker(arrival: BusArrival): number | null {
-  const now = useArrivalClock();
-
-  return useMemo(() => getVisualRemainingMinutes(arrival, now), [arrival, now]);
-}
 
 const listeners = new Set<() => void>();
 let now = Date.now();
@@ -30,7 +24,7 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
-function useArrivalClock(): number {
+export function useArrivalClock(): number {
   return useSyncExternalStore(
     subscribe,
     () => now,
@@ -38,7 +32,7 @@ function useArrivalClock(): number {
   );
 }
 
-function getVisualRemainingMinutes(arrival: BusArrival, now: number): number | null {
+export function getVisualRemainingMinutes(arrival: BusArrival, now: number): number | null {
   if (arrival.status === 'EXPIRED' || arrival.remainingMinutes === null || !arrival.timestamp) {
     return null;
   }
@@ -49,4 +43,19 @@ function getVisualRemainingMinutes(arrival: BusArrival, now: number): number | n
   }
 
   return Math.max(0, arrival.remainingMinutes - Math.floor((now - timestamp) / 60_000));
+}
+
+export function getArrivalClockTime(visualMinutes: number | null, now: number): string | null {
+  if (visualMinutes === null) {
+    return null;
+  }
+  const arrivalTimeMs = now + visualMinutes * 60_000;
+  const date = new Date(arrivalTimeMs);
+  const hours = date.getHours().toString().padStart(2, '0');
+  const minutes = date.getMinutes().toString().padStart(2, '0');
+  return `${hours}:${minutes} hs`;
+}
+
+export function formatVisualArrivalMinutes(visualMinutes: number): string {
+  return visualMinutes === 0 ? 'LLEGANDO (<1 min)' : `${visualMinutes} min`;
 }

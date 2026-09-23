@@ -3,15 +3,14 @@ import { ActivityIndicator, Modal, Pressable, ScrollView, Text, View } from 'rea
 import {
   Camera,
   GeoJSONSource,
+  Images,
   Layer,
   type LngLat,
   Map,
-  Marker,
   type InitialViewState,
   type StyleSpecification,
 } from '@maplibre/maplibre-react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { Picker } from '@react-native-picker/picker';
 import { useQuery } from '@tanstack/react-query';
 
 import {
@@ -22,7 +21,19 @@ import {
   getMapStops,
 } from '@/src/features/map/api';
 import { getArrivals } from '@/src/features/transit/api';
-import { useArrivalTicker } from '@/src/features/transit/use-arrival-ticker';
+import { MAP_IMAGES } from '@/src/features/transit/arrival-map-modal';
+import { MapControls } from '@/src/features/map/map-controls';
+import { StopSheet } from '@/src/features/map/stop-sheet';
+import { ArrivalDetail, TelemetryBadge } from '@/src/features/transit/arrival-ui';
+import {
+  createRouteArrows as createSharedRouteArrows,
+  distanceMeters as geoDistanceMeters,
+} from '@/src/features/map/geo';
+import {
+  getArrivalClockTime,
+  getVisualRemainingMinutes,
+  useArrivalClock,
+} from '@/src/features/transit/use-arrival-ticker';
 import { queryKeys } from '@/src/lib/query-client';
 import type {
   BusArrival,
@@ -100,6 +111,30 @@ export function TransitMap() {
         .filter((route): route is RenderedRoute => route !== null),
     [direction, routesQuery.data]
   );
+  const stopFeatures = useMemo<GeoJSON.FeatureCollection>(
+    () => ({
+      type: 'FeatureCollection',
+      features: markers.map((item) => ({
+        type: 'Feature',
+        properties: { identifier: item.identifier },
+        geometry: { type: 'Point', coordinates: [item.longitude!, item.latitude!] },
+      })),
+    }),
+    [markers]
+  );
+  const arrowFeatures = useMemo<GeoJSON.FeatureCollection>(
+    () => ({
+      type: 'FeatureCollection',
+      features: routeLines.flatMap(({ id, arrows }) =>
+        arrows.map((arrow) => ({
+          type: 'Feature',
+          properties: { bearing: arrow.bearing - 90, id },
+          geometry: { type: 'Point', coordinates: arrow.lngLat },
+        }))
+      ),
+    }),
+    [routeLines]
+  );
 
   return (
     <View className="flex-1 bg-[#121212]">
@@ -114,6 +149,7 @@ export function TransitMap() {
         }}
         style={{ flex: 1 }}>
         <Camera initialViewState={INITIAL_CAMERA} maxZoom={19} minZoom={1} />
+        <Images images={MAP_IMAGES} />
         {routeLines.map(({ id, line }) => (
           <GeoJSONSource data={line} id={`transit-route-${id}`} key={id}>
             <Layer
@@ -124,97 +160,72 @@ export function TransitMap() {
             />
           </GeoJSONSource>
         ))}
-        {routeLines.flatMap(({ id, arrows }) =>
-          arrows.map((arrow, index) => (
-            <Marker
-              id={`transit-route-arrow-${id}-${index}`}
-              key={`${id}-${index}`}
-              lngLat={arrow.lngLat}>
-              <View style={{ transform: [{ rotate: `${arrow.bearing - 90}deg` }] }}>
-                <MaterialCommunityIcons color="#101114" name="arrow-right-bold" size={38} />
-              </View>
-            </Marker>
-          ))
-        )}
-        {markers.map((item) => (
-          <Marker
-            id={item.identifier}
-            key={item.identifier}
-            lngLat={[item.longitude!, item.latitude!]}
-            onPress={() => setStop(item)}>
-            <View
-              accessibilityLabel={item.description ?? item.identifier}
-              style={{
-                alignItems: 'center',
-                backgroundColor: '#1E1E24',
-                borderColor: '#80D4FF',
-                borderRadius: 20,
-                borderWidth: 3,
-                height: 40,
-                justifyContent: 'center',
-                width: 40,
-              }}>
-              <MaterialCommunityIcons color="#80D4FF" name="bus-stop" size={21} />
-            </View>
-          </Marker>
-        ))}
-      </Map>
-      <View className="absolute left-4 right-4 top-4 rounded-2xl bg-[#1E1E24] p-3">
-        <Text className="mb-1 text-xs text-[#A4A4AB]">Línea comercial</Text>
-        <Picker
-          dropdownIconColor="#E1E1E6"
-          onValueChange={(value) => {
-            const selected = (linesQuery.data ?? []).find((item) => item.name === value) ?? null;
-            setLine(selected);
-            setDirection(null);
-            setStop(null);
-          }}
-          selectedValue={line?.name ?? ''}
-          style={{ color: '#E1E1E6' }}>
-          <Picker.Item
-            color="#A4A4AB"
-            label={linesQuery.isPending ? 'Cargando líneas…' : 'Seleccionar línea'}
-            value=""
+        <GeoJSONSource data={arrowFeatures} id="transit-route-arrows">
+          <Layer
+            id="transit-route-arrow-symbols"
+            layout={{
+              'icon-allow-overlap': true,
+              'icon-image': 'route-arrow-icon',
+              'icon-ignore-placement': true,
+              'icon-rotate': ['get', 'bearing'],
+              'icon-rotation-alignment': 'map',
+              'icon-size': 0.24,
+            }}
+            type="symbol"
           />
-          {(linesQuery.data ?? []).map((item) => (
-            <Picker.Item key={item.name} label={item.name} value={item.name} />
-          ))}
-        </Picker>
-        {line ? (
-          <>
-            <Text className="mb-1 mt-2 text-xs text-[#A4A4AB]">Sentido</Text>
-            <Picker
-              dropdownIconColor="#E1E1E6"
-              onValueChange={(value) => {
-                setDirection(value || null);
-                setStop(null);
-              }}
-              selectedValue={direction ?? ''}
-              style={{ color: '#E1E1E6' }}>
-              <Picker.Item
-                color="#A4A4AB"
-                label={directionsQuery.isPending ? 'Cargando sentidos…' : 'Seleccionar sentido'}
-                value=""
-              />
-              {(directionsQuery.data ?? []).map((item) => (
-                <Picker.Item
-                  key={item.direction}
-                  label={item.expandedDirection ?? item.direction}
-                  value={item.direction}
-                />
-              ))}
-            </Picker>
-          </>
-        ) : null}
-        {linesQuery.isError ||
-        directionsQuery.isError ||
-        stopsQuery.isError ||
-        routesQuery.isError ? (
-          <Text className="mt-2 text-xs text-[#E5B842]">
-            No se pudo cargar el catálogo. Reintentá cambiando la selección.
-          </Text>
-        ) : null}
-      </View>
+        </GeoJSONSource>
+        <GeoJSONSource
+          data={stopFeatures}
+          hitbox={{ bottom: 18, left: 18, right: 18, top: 18 }}
+          id="transit-stops"
+          onPress={(event) => {
+            const identifier = event.nativeEvent.features[0]?.properties?.identifier;
+            const selected =
+              typeof identifier === 'string'
+                ? markers.find((item) => item.identifier === identifier)
+                : undefined;
+            if (selected) setStop(selected);
+          }}>
+          <Layer
+            id="transit-stop-circle"
+            paint={{
+              'circle-color': '#1E1E24',
+              'circle-radius': 14,
+              'circle-stroke-color': '#80D4FF',
+              'circle-stroke-width': 3,
+            }}
+            type="circle"
+          />
+          <Layer
+            id="transit-stop-icon"
+            layout={{
+              'icon-allow-overlap': true,
+              'icon-image': 'arrival-stop-icon',
+              'icon-ignore-placement': true,
+              'icon-size': 0.48,
+            }}
+            type="symbol"
+          />
+        </GeoJSONSource>
+      </Map>
+      <MapControls
+        direction={direction}
+        directionsQuery={directionsQuery}
+        line={line}
+        linesQuery={linesQuery}
+        onDirectionChange={(value) => {
+          setDirection(value);
+          setStop(null);
+        }}
+        onLineChange={(value) => {
+          setLine(value);
+          setDirection(null);
+          setStop(null);
+        }}
+        showError={
+          linesQuery.isError || directionsQuery.isError || stopsQuery.isError || routesQuery.isError
+        }
+      />
       <Text className="absolute bottom-3 left-4 text-xs text-[#A4A4AB]">
         © OpenStreetMap contributors
       </Text>
@@ -281,6 +292,8 @@ function findStopAtTap(lngLat: LngLat, stops: MapStop[]): MapStop | null {
 }
 
 function createRouteArrows(coordinates: LngLat[]): RouteArrow[] {
+  return createSharedRouteArrows(coordinates, ROUTE_ARROW_SPACING_METERS);
+  /*
   const arrows: RouteArrow[] = [];
   let distanceSinceLastArrow = 0;
 
@@ -314,26 +327,17 @@ function createRouteArrows(coordinates: LngLat[]): RouteArrow[] {
   }
 
   return arrows;
+  */
 }
 
 function distanceMeters(
   [startLongitude, startLatitude]: LngLat,
   [endLongitude, endLatitude]: LngLat
 ): number {
-  const earthRadiusMeters = 6_371_000;
-  const latitudeDelta = radians(endLatitude - startLatitude);
-  const longitudeDelta = radians(endLongitude - startLongitude);
-  const startLatitudeRadians = radians(startLatitude);
-  const endLatitudeRadians = radians(endLatitude);
-  const a =
-    Math.sin(latitudeDelta / 2) ** 2 +
-    Math.cos(startLatitudeRadians) *
-      Math.cos(endLatitudeRadians) *
-      Math.sin(longitudeDelta / 2) ** 2;
-  return 2 * earthRadiusMeters * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return geoDistanceMeters([startLongitude, startLatitude], [endLongitude, endLatitude]);
 }
 
-function bearingDegrees(
+export function bearingDegrees(
   [startLongitude, startLatitude]: LngLat,
   [endLongitude, endLatitude]: LngLat
 ): number {
@@ -356,7 +360,9 @@ function degrees(radiansValue: number): number {
   return (radiansValue * 180) / Math.PI;
 }
 
-function StopSheet({
+// Retained temporarily only as a non-public compatibility implementation while
+// callers use the extracted StopSheet module above.
+export function LegacyStopSheet({
   detail,
   isLoading,
   onClose,
@@ -376,7 +382,7 @@ function StopSheet({
           className="absolute inset-0 bg-black/40"
           onPress={onClose}
         />
-        <View className="max-h-[82%] min-h-[45%] rounded-t-3xl bg-[#1E1E24] px-5 pb-8 pt-5">
+        <View className="max-h-[64%] min-h-[46%] rounded-t-3xl bg-[#1E1E24] px-5 pb-6 pt-4">
           <ScrollView contentContainerStyle={{ paddingBottom: 12 }}>
             {isLoading ? (
               <View className="mt-6 items-center">
@@ -444,6 +450,7 @@ function MapStopArrivals({
   onBack: () => void;
   stopIdentifier: string;
 }) {
+  const now = useArrivalClock();
   const arrivalsQuery = useQuery({
     queryKey: queryKeys.telemetry.arrivals(
       direction.nameTransitLine,
@@ -461,50 +468,119 @@ function MapStopArrivals({
   return (
     <>
       <View className="flex-row items-center justify-between">
-        <Pressable accessibilityLabel="Volver a colectivos" onPress={onBack}>
-          <MaterialCommunityIcons color="#80D4FF" name="arrow-left" size={26} />
+        <Pressable
+          accessibilityLabel="Volver a colectivos"
+          className="h-10 w-10 items-center justify-center rounded-full bg-[#25252B] active:opacity-70"
+          onPress={onBack}>
+          <MaterialCommunityIcons color="#80D4FF" name="arrow-left" size={22} />
         </Pressable>
+        <Text className="text-sm font-semibold text-[#E1E1E6]">Próximas llegadas</Text>
         <Pressable
           accessibilityLabel="Actualizar arribos"
+          className="h-10 w-10 items-center justify-center rounded-full bg-[#25252B] active:opacity-70 disabled:opacity-40"
           disabled={arrivalsQuery.isFetching}
           onPress={() => void arrivalsQuery.refetch()}>
-          <MaterialCommunityIcons color="#80D4FF" name="refresh" size={26} />
+          {arrivalsQuery.isFetching ? (
+            <ActivityIndicator color="#80D4FF" size="small" />
+          ) : (
+            <MaterialCommunityIcons color="#80D4FF" name="refresh" size={21} />
+          )}
         </Pressable>
       </View>
-      <Text className="mt-4 text-xl font-bold text-[#E1E1E6]">
-        Línea {direction.nameTransitLine}
-      </Text>
-      <Text className="mt-1 text-sm text-[#80D4FF]">
-        {direction.expandedDirection ?? direction.direction}
-      </Text>
-      {arrivalsQuery.isPending ? <ActivityIndicator className="mt-8" color="#80D4FF" /> : null}
+
+      <View className="mt-4 flex-row items-center rounded-2xl bg-[#25252B] p-3">
+        <View className="mr-3 h-11 w-11 items-center justify-center rounded-xl bg-[#12354A]">
+          <MaterialCommunityIcons color="#80D4FF" name="bus-clock" size={24} />
+        </View>
+        <View className="flex-1">
+          <Text className="text-base font-bold text-[#E1E1E6]">
+            Línea {direction.nameTransitLine}
+          </Text>
+          <Text className="mt-0.5 text-sm text-[#80D4FF]" numberOfLines={1}>
+            {direction.expandedDirection ?? direction.direction}
+          </Text>
+        </View>
+      </View>
+
+      {arrivalsQuery.isPending ? (
+        <View className="items-center py-10">
+          <ActivityIndicator color="#80D4FF" />
+          <Text className="mt-3 text-sm text-[#A4A4AB]">Buscando próximos colectivos…</Text>
+        </View>
+      ) : null}
       {arrivalsQuery.isError ? (
-        <Text className="mt-4 text-sm text-[#E5B842]">No se pudieron consultar los arribos.</Text>
+        <View className="mt-4 rounded-2xl bg-[#332500] p-4">
+          <Text className="text-sm text-[#E5B842]">No se pudieron consultar los arribos.</Text>
+        </View>
       ) : null}
       {!arrivalsQuery.isPending && !arrivalsQuery.isError && arrivals.length === 0 ? (
-        <Text className="mt-5 text-sm text-[#A4A4AB]">
-          No hay arribos próximos para este sentido.
-        </Text>
+        <View className="items-center py-9">
+          <MaterialCommunityIcons color="#A4A4AB" name="bus-clock" size={30} />
+          <Text className="mt-3 text-sm text-[#A4A4AB]">
+            No hay arribos próximos para este sentido.
+          </Text>
+        </View>
       ) : null}
-      {arrivals.map((arrival) => (
-        <ArrivalRow
-          arrival={arrival}
-          key={arrival.vehicleUnit ?? `${arrival.lineCode}:${arrival.estimatedArrivalTime}`}
-        />
-      ))}
+      <View className="mt-4">
+        {arrivals.map((arrival) => (
+          <MapArrivalCard
+            arrival={arrival}
+            key={arrival.vehicleUnit ?? `${arrival.lineCode}:${arrival.estimatedArrivalTime}`}
+            now={now}
+          />
+        ))}
+      </View>
     </>
   );
 }
 
-function ArrivalRow({ arrival }: { arrival: BusArrival }) {
-  const visualMinutes = useArrivalTicker(arrival);
-  const eta =
-    arrival.status === 'EXPIRED' || visualMinutes === null
-      ? 'ETA no confiable'
-      : `${visualMinutes} min`;
+function MapArrivalCard({ arrival, now }: { arrival: BusArrival; now: number }) {
+  const visualMinutes = getVisualRemainingMinutes(arrival, now);
+  const clockTime = getArrivalClockTime(visualMinutes, now);
+  const reliable = arrival.status !== 'EXPIRED' && visualMinutes !== null;
+
   return (
-    <Text className="mt-2 text-sm text-[#E1E1E6]">
-      {arrival.vehicleUnit ?? 'Coche sin identificar'} · {eta}
-    </Text>
+    <View className="mb-3 overflow-hidden rounded-2xl border border-[#303038] bg-[#25252B]">
+      <View className="flex-row items-center p-4">
+        <View className="mr-3 h-12 w-12 items-center justify-center rounded-xl bg-[#1E1E24]">
+          <MaterialCommunityIcons color="#80D4FF" name="bus" size={24} />
+        </View>
+        <View className="flex-1">
+          <Text className="text-sm text-[#A4A4AB]">
+            Coche {arrival.vehicleUnit ?? 'Sin identificar'}
+          </Text>
+          <Text className="mt-0.5 text-2xl font-bold text-[#E1E1E6]">
+            {reliable ? `${visualMinutes} min` : 'ETA no confiable'}
+          </Text>
+        </View>
+        <TelemetryBadge compact status={arrival.status} />
+      </View>
+      {reliable && clockTime ? (
+        <View className="border-t border-[#303038] px-4 py-2.5">
+          <Text className="text-sm text-[#A4A4AB]">Llegada aproximada {clockTime}</Text>
+        </View>
+      ) : null}
+      {arrival.distanceMeters !== null || arrival.accessible !== null || arrival.branch ? (
+        <View className="flex-row flex-wrap gap-x-4 gap-y-2 border-t border-[#303038] px-4 py-2.5">
+          {arrival.distanceMeters !== null ? (
+            <ArrivalDetail
+              compact
+              icon="map-marker-distance"
+              value={`${arrival.distanceMeters} m`}
+            />
+          ) : null}
+          {arrival.accessible !== null ? (
+            <ArrivalDetail
+              compact
+              icon="wheelchair-accessibility"
+              value={arrival.accessible ? 'Accesible' : 'No accesible'}
+            />
+          ) : null}
+          {arrival.branch ? (
+            <ArrivalDetail compact icon="sign-direction" value={arrival.branch} />
+          ) : null}
+        </View>
+      ) : null}
+    </View>
   );
 }

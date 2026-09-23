@@ -26,10 +26,6 @@ export const queryKeys = {
       ['catalog', 'intersections', commercialLineCode, streetCode] as const,
     stopsWithFlags: (commercialLineCode: string, streetCode: string, intersectionCode: string) =>
       ['catalog', 'stops-with-flags', commercialLineCode, streetCode, intersectionCode] as const,
-    route: (commercialLineCode: string) => ['catalog', 'route', commercialLineCode] as const,
-    consolidatedStop: (commercialLineCode: string, streetCode: string, intersectionCode: string) =>
-      ['catalog', 'consolidated-stop', commercialLineCode, streetCode, intersectionCode] as const,
-    stops: (commercialLineCode: string) => ['catalog', 'stops', commercialLineCode] as const,
   },
   map: {
     lines: () => ['map', 'lines'] as const,

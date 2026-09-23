@@ -1,102 +1,100 @@
 import { useState } from 'react';
-import { Pressable, Text, TextInput, View } from 'react-native';
+import {
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  TouchableWithoutFeedback,
+  View,
+} from 'react-native';
 
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { Link } from 'expo-router';
 
 import { ProblemDetailError } from '@/src/lib/api-client';
 
 type AuthFormProps = {
-  mode: 'login' | 'register';
   isSubmitting: boolean;
   error: Error | null;
-  onSubmit: (values: { email: string; password: string; fullName?: string }) => void;
+  onSubmit: (values: { email: string; password: string }) => void;
 };
 
-export function AuthForm({ mode, error, isSubmitting, onSubmit }: AuthFormProps) {
+export function AuthForm({ error, isSubmitting, onSubmit }: AuthFormProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [fullName, setFullName] = useState('');
-  const isRegister = mode === 'register';
 
   function submit(): void {
     onSubmit({
       email: email.trim(),
       password,
-      ...(isRegister ? { fullName: fullName.trim() } : {}),
     });
   }
 
   return (
-    <View className="flex-1 justify-center bg-[#121212] px-6">
-      <View className="mb-10 gap-3">
-        <View className="h-12 w-12 items-center justify-center rounded-2xl bg-[#1E1E24]">
-          <MaterialCommunityIcons color="#80D4FF" name="bus-clock" size={28} />
-        </View>
-        <Text className="text-3xl font-bold text-[#E1E1E6]">Cuando Llega Pro</Text>
-        <Text className="text-base leading-6 text-[#A4A4AB]">
-          {isRegister
-            ? 'Creá tu cuenta para guardar tus consultas.'
-            : 'Ingresá para consultar tus próximos arribos.'}
-        </Text>
-      </View>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
+      className="flex-1 bg-[#121212]">
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+        <ScrollView
+          contentContainerStyle={{ flexGrow: 1, justifyContent: 'center' }}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}>
+          <View className="px-6 py-6">
+            <View className="mb-8 gap-3">
+              <View className="h-12 w-12 items-center justify-center rounded-2xl bg-[#1E1E24]">
+                <MaterialCommunityIcons color="#80D4FF" name="bus-clock" size={28} />
+              </View>
+              <Text className="text-3xl font-bold text-[#E1E1E6]">Cuando Llega Pro</Text>
+              <Text className="text-base leading-6 text-[#A4A4AB]">
+                Ingresá para consultar tus próximos arribos.
+              </Text>
+            </View>
 
-      <View className="gap-4 rounded-3xl bg-[#1E1E24] p-5">
-        {isRegister ? (
-          <Field
-            autoComplete="name"
-            icon="account-outline"
-            label="Nombre completo"
-            onChangeText={setFullName}
-            value={fullName}
-          />
-        ) : null}
-        <Field
-          autoCapitalize="none"
-          autoComplete="email"
-          icon="email-outline"
-          keyboardType="email-address"
-          label="Email"
-          onChangeText={setEmail}
-          value={email}
-        />
-        <Field
-          autoComplete={isRegister ? 'new-password' : 'current-password'}
-          icon="lock-outline"
-          label="Contraseña"
-          onChangeText={setPassword}
-          secureTextEntry
-          value={password}
-        />
+            <View className="gap-4 rounded-3xl bg-[#1E1E24] p-5">
+              <Field
+                autoCapitalize="none"
+                autoComplete="email"
+                icon="email-outline"
+                keyboardType="email-address"
+                label="Email"
+                onChangeText={setEmail}
+                value={email}
+              />
+              <Field
+                autoCapitalize="none"
+                autoComplete="current-password"
+                icon="lock-outline"
+                label="Contraseña"
+                onChangeText={setPassword}
+                secureTextEntry
+                value={password}
+              />
 
-        {error ? (
-          <View className="flex-row items-center gap-2.5 rounded-xl border border-[#FF4D4D]/40 bg-[#381E1E] p-3">
-            <MaterialCommunityIcons color="#FF4D4D" name="alert-circle-outline" size={20} />
-            <Text className="flex-1 text-sm font-medium leading-5 text-[#FF9999]">
-              {getErrorMessage(error)}
-            </Text>
+              {error ? (
+                <View className="flex-row items-center gap-2.5 rounded-xl border border-[#FF4D4D]/40 bg-[#381E1E] p-3">
+                  <MaterialCommunityIcons color="#FF4D4D" name="alert-circle-outline" size={20} />
+                  <Text className="flex-1 text-sm font-medium leading-5 text-[#FF9999]">
+                    {getErrorMessage(error)}
+                  </Text>
+                </View>
+              ) : null}
+
+              <Pressable
+                accessibilityRole="button"
+                className="mt-2 items-center rounded-xl bg-[#80D4FF] px-4 py-4 active:opacity-75 disabled:opacity-50"
+                disabled={isSubmitting}
+                onPress={submit}>
+                <Text className="font-semibold text-[#121212]">
+                  {isSubmitting ? 'Procesando…' : 'Iniciar sesión'}
+                </Text>
+              </Pressable>
+            </View>
           </View>
-        ) : null}
-
-        <Pressable
-          accessibilityRole="button"
-          className="mt-2 items-center rounded-xl bg-[#80D4FF] px-4 py-4 active:opacity-75 disabled:opacity-50"
-          disabled={isSubmitting}
-          onPress={submit}>
-          <Text className="font-semibold text-[#121212]">
-            {isSubmitting ? 'Procesando…' : isRegister ? 'Crear cuenta' : 'Iniciar sesión'}
-          </Text>
-        </Pressable>
-      </View>
-
-      <Link asChild href={isRegister ? '/login' : '/register'}>
-        <Pressable className="mt-6 items-center p-3">
-          <Text className="text-sm text-[#80D4FF]">
-            {isRegister ? 'Ya tengo una cuenta' : 'Quiero crear una cuenta'}
-          </Text>
-        </Pressable>
-      </Link>
-    </View>
+        </ScrollView>
+      </TouchableWithoutFeedback>
+    </KeyboardAvoidingView>
   );
 }
 

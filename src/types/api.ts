@@ -182,8 +182,11 @@ export type AuthRequest = {
   password: string;
 };
 
-export type RegisterRequest = AuthRequest & {
+export type AdminCreateUserRequest = {
+  email: string;
+  password: string;
   fullName: string;
+  role?: string;
 };
 
 export type AuthenticatedUser = {
@@ -218,6 +221,7 @@ export type PresetConfig = {
   alias: string;
   icon: string;
   color: string;
+  location?: string | null;
   activeSchedule: PresetSchedule | null;
   notificationSettings: PresetNotificationSettings | null;
 };

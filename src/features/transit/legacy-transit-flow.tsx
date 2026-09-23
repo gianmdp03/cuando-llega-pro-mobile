@@ -1,14 +1,31 @@
-import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, Text, TextInput, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Modal, Pressable, Text, TextInput, View } from 'react-native';
+import Animated, {
+  cancelAnimation,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withTiming,
+} from 'react-native-reanimated';
 
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { FlashList, type ListRenderItem } from '@shopify/flash-list';
 import { useMutation, useQuery, type UseQueryResult } from '@tanstack/react-query';
 
-import { ProblemDetailError } from '@/src/lib/api-client';
+import { getErrorMessage } from '@/src/lib/error-message';
 import { queryClient, queryKeys } from '@/src/lib/query-client';
 import { createPreset } from '@/src/features/presets/api';
 import { getMapStop } from '@/src/features/map/api';
+import { ArrivalMapModal } from '@/src/features/transit/arrival-map-modal';
+import { ArrivalDetail, TelemetryBadge } from '@/src/features/transit/arrival-ui';
+import {
+  CatalogList,
+  CatalogRow,
+  EmptyState,
+  ErrorState,
+  LoadingState,
+  StepLayout,
+} from '@/src/features/transit/transit-catalog-ui';
 import {
   getArrivals,
   getTransitIntersections,
@@ -16,13 +33,19 @@ import {
   getTransitStopsWithFlag,
   getTransitStreets,
 } from '@/src/features/transit/api';
-import { useArrivalTicker } from '@/src/features/transit/use-arrival-ticker';
+import {
+  formatVisualArrivalMinutes,
+  getArrivalClockTime,
+  getVisualRemainingMinutes,
+  useArrivalClock,
+} from '@/src/features/transit/use-arrival-ticker';
+
 import type {
   ArrivalResponseDTO,
   BusArrival,
   MapStopDirection,
+  PresetDetailDTO,
   PresetRequestDTO,
-  TelemetryStatus,
   TransitIntersectionDTO,
   TransitLineDTO,
   TransitStopWithFlagDTO,
@@ -95,6 +118,57 @@ export function LegacyTransitFlow() {
   );
 }
 
+/**
+ * Opens a saved preset in the exact same arrivals experience used by the
+ * lines flow. Its only navigation difference is that Back returns to the
+ * presets selector.
+ */
+export function PresetTransitFlow({
+  onBack,
+  preset,
+}: {
+  onBack: () => void;
+  preset: PresetDetailDTO;
+}) {
+  const [selection, setSelection] = useState(() => ({
+    line: presetLine(preset.codigoLinea),
+    stop: presetStop(preset),
+  }));
+  return (
+    <ArrivalsStep
+      line={selection.line}
+      locationOverride={preset.config.location ?? undefined}
+      onBack={onBack}
+      onSwitchToLineAtStop={(line, stop) => setSelection({ line, stop })}
+      showSavePreset={false}
+      stop={selection.stop}
+    />
+  );
+}
+
+function presetLine(codigo: string): TransitLineDTO {
+  return {
+    id: codigo,
+    codigo,
+    descripcion: codigo,
+    codigoEntidad: null,
+    codigoEmpresa: null,
+  };
+}
+
+function presetStop(preset: PresetDetailDTO): TransitStopWithFlagDTO {
+  const direction = preset.bandera ?? '';
+  return {
+    codigo: preset.identificadorParada,
+    identificador: preset.identificadorParada,
+    descripcion: preset.config.alias,
+    abreviaturaBandera: direction,
+    abreviaturaAmpliadaBandera: direction || 'Todos los sentidos',
+    latitudParada: null,
+    longitudParada: null,
+  };
+}
+
 function LinesStep({ onSelect }: { onSelect: (line: TransitLineDTO) => void }) {
   const [search, setSearch] = useState('');
   const query = useQuery({
@@ -156,12 +230,15 @@ function StreetsStep({
     <ListStep
       data={query.data ?? []}
       emptyMessage="No hay calles disponibles para esta línea."
+      emptySearchMessage="No hay calles que coincidan con la búsqueda."
+      getSearchText={(item) => item.descripcion}
       keyExtractor={(item) => item.codigo}
       onBack={onBack}
       query={query}
       renderItem={({ item }) => (
         <CatalogRow onPress={() => onSelect(item)} title={item.descripcion} />
       )}
+      searchPlaceholder="Buscar calle"
       subtitle={`Línea ${line.codigo}`}
       title="Calles"
     />
@@ -183,12 +260,15 @@ function IntersectionsStep({
     <ListStep
       data={query.data ?? []}
       emptyMessage="No hay intersecciones disponibles."
+      emptySearchMessage="No hay intersecciones que coincidan con la búsqueda."
+      getSearchText={(item) => item.descripcion}
       keyExtractor={(item) => item.codigo}
       onBack={onBack}
       query={query}
       renderItem={({ item }) => (
         <CatalogRow onPress={() => onSelect(item)} title={item.descripcion} />
       )}
+      searchPlaceholder="Buscar intersección"
       subtitle={street.descripcion}
       title="Intersecciones"
     />
@@ -250,27 +330,54 @@ function StopsStep({
 function ListStep<T>({
   data,
   emptyMessage,
+  emptySearchMessage,
+  getSearchText,
   keyExtractor,
   onBack,
   query,
   renderItem,
+  searchPlaceholder,
   subtitle,
   title,
 }: {
   data: T[];
   emptyMessage: string;
+  emptySearchMessage?: string;
+  getSearchText?: (item: T) => string;
   keyExtractor: (item: T) => string;
   onBack: () => void;
   query: UseQueryResult<T[], Error>;
   renderItem: ListRenderItem<T>;
+  searchPlaceholder?: string;
   subtitle: string;
   title: string;
 }) {
+  const [search, setSearch] = useState('');
+  const filteredData = useMemo(() => {
+    const value = search.trim().toLowerCase();
+    return value && getSearchText
+      ? data.filter((item) => getSearchText(item).toLowerCase().includes(value))
+      : data;
+  }, [data, getSearchText, search]);
+
   return (
     <StepLayout onBack={onBack} subtitle={subtitle} title={title}>
+      {searchPlaceholder ? (
+        <View className="mb-3 flex-row items-center rounded-xl bg-[#25252B] px-3">
+          <MaterialCommunityIcons color="#A4A4AB" name="magnify" size={20} />
+          <TextInput
+            autoCapitalize="none"
+            className="ml-2 min-h-12 flex-1 text-base text-[#E1E1E6]"
+            onChangeText={setSearch}
+            placeholder={searchPlaceholder}
+            placeholderTextColor="#8E8E93"
+            value={search}
+          />
+        </View>
+      ) : null}
       <CatalogList
-        data={data}
-        emptyMessage={emptyMessage}
+        data={filteredData}
+        emptyMessage={search.trim() && emptySearchMessage ? emptySearchMessage : emptyMessage}
         keyExtractor={keyExtractor}
         query={query}
         renderItem={renderItem}
@@ -282,19 +389,24 @@ function ListStep<T>({
 function ArrivalsStep({
   intersection,
   line,
+  locationOverride,
   onBack,
   onSwitchToLineAtStop,
+  showSavePreset = true,
   stop,
   street,
 }: {
   intersection?: TransitIntersectionDTO;
   line: TransitLineDTO;
+  locationOverride?: string;
   onBack: () => void;
   onSwitchToLineAtStop: (line: TransitLineDTO, stop: TransitStopWithFlagDTO) => void;
+  showSavePreset?: boolean;
   stop: TransitStopWithFlagDTO;
   street?: TransitStreetDTO;
 }) {
   const [isSaving, setIsSaving] = useState(false);
+  const [isMapVisible, setIsMapVisible] = useState(false);
   const query = useQuery({
     queryKey: queryKeys.telemetry.arrivals(
       line.codigo,
@@ -307,6 +419,31 @@ function ArrivalsStep({
     retry: 0,
   });
 
+  // --- Animated spin for the refresh icon ---
+  const rotation = useSharedValue(0);
+  const prevFetching = useRef(false);
+
+  useEffect(() => {
+    if (query.isFetching && !prevFetching.current) {
+      rotation.value = 0;
+      rotation.value = withRepeat(withTiming(360, { duration: 800 }), -1, false);
+    } else if (!query.isFetching && prevFetching.current) {
+      cancelAnimation(rotation);
+      rotation.value = withTiming(360, { duration: 200 });
+    }
+    prevFetching.current = query.isFetching;
+  }, [query.isFetching, rotation]);
+
+  const iconStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${rotation.value}deg` }],
+  }));
+  // ------------------------------------------
+
+  const lastUpdated = query.dataUpdatedAt > 0 ? new Date(query.dataUpdatedAt) : null;
+  const lastUpdatedLabel = lastUpdated
+    ? `${lastUpdated.getHours().toString().padStart(2, '0')}:${lastUpdated.getMinutes().toString().padStart(2, '0')}:${lastUpdated.getSeconds().toString().padStart(2, '0')}`
+    : null;
+
   const quickSwitchFooter = (
     <QuickSwitchPanel
       currentBandera={stop.abreviaturaBandera}
@@ -317,9 +454,10 @@ function ArrivalsStep({
   );
 
   const location =
-    street && intersection
+    locationOverride ??
+    (street && intersection
       ? `${street.descripcion} ${/^[IiYy]/u.test(intersection.descripcion) ? 'e' : 'y'} ${intersection.descripcion}`
-      : undefined;
+      : undefined);
 
   return (
     <StepLayout
@@ -327,16 +465,46 @@ function ArrivalsStep({
       onBack={onBack}
       subtitle={stop.abreviaturaAmpliadaBandera || stop.abreviaturaBandera}
       title={`Línea ${line.codigo}`}>
-      <View className="mb-3 flex-row justify-end">
-        <Pressable
-          accessibilityLabel="Actualizar arribos"
-          accessibilityRole="button"
-          className="flex-row items-center rounded-xl bg-[#25252B] px-3 py-2 active:opacity-70"
-          disabled={query.isFetching}
-          onPress={() => void query.refetch()}>
-          <MaterialCommunityIcons color="#80D4FF" name="refresh" size={18} />
-          <Text className="ml-2 text-sm font-semibold text-[#E1E1E6]">Actualizar</Text>
-        </Pressable>
+      <View className="mb-3">
+        <View className="flex-row items-center justify-between">
+          {query.isSuccess && query.data.status ? (
+            <TelemetryBadge prominent status={query.data.status} />
+          ) : null}
+          <View className="flex-row gap-2">
+            <Pressable
+              accessibilityLabel="Mostrar mapa de arribos"
+              accessibilityRole="button"
+              className="flex-row items-center rounded-xl bg-[#25252B] px-3 py-2 active:opacity-70"
+              onPress={() => setIsMapVisible(true)}>
+              <MaterialCommunityIcons color="#80D4FF" name="map-outline" size={18} />
+              <Text className="ml-2 text-sm font-semibold text-[#E1E1E6]">Mapa</Text>
+            </Pressable>
+            <Pressable
+              accessibilityLabel="Actualizar arribos"
+              accessibilityRole="button"
+              className="flex-row items-center rounded-xl bg-[#25252B] px-3 py-2 active:opacity-70"
+              disabled={query.isFetching}
+              onPress={() => void query.refetch()}>
+              <Animated.View style={iconStyle}>
+                <MaterialCommunityIcons
+                  color={query.isFetching ? '#4A90A4' : '#80D4FF'}
+                  name="refresh"
+                  size={18}
+                />
+              </Animated.View>
+              <Text
+                className="ml-2 text-sm font-semibold"
+                style={{ color: query.isFetching ? '#4A90A4' : '#E1E1E6' }}>
+                {query.isFetching ? 'Actualizando…' : 'Actualizar'}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+        {lastUpdatedLabel ? (
+          <Text className="mt-2 text-sm text-[#8E8E93]" numberOfLines={1}>
+            {query.isFetching ? 'Consultando…' : `Última actualización: ${lastUpdatedLabel}`}
+          </Text>
+        ) : null}
       </View>
       <View className="mb-3 flex-row items-center justify-between rounded-2xl bg-[#1E1E24] p-4">
         <View className="flex-1">
@@ -344,20 +512,35 @@ function ArrivalsStep({
           <Text className="mt-1 text-base font-semibold text-[#E1E1E6]">{stop.descripcion}</Text>
           <Text className="mt-1 text-sm text-[#A4A4AB]">{stop.identificador}</Text>
         </View>
-        <Pressable
-          accessibilityLabel="Guardar acceso rápido"
-          accessibilityRole="button"
-          className="rounded-xl bg-[#25252B] p-3 active:opacity-70"
-          onPress={() => setIsSaving(true)}>
-          <MaterialCommunityIcons color="#80D4FF" name="star-plus-outline" size={22} />
-        </Pressable>
+        {showSavePreset ? (
+          <Pressable
+            accessibilityLabel="Guardar acceso rápido"
+            accessibilityRole="button"
+            className="rounded-xl bg-[#25252B] p-3 active:opacity-70"
+            onPress={() => setIsSaving(true)}>
+            <MaterialCommunityIcons color="#80D4FF" name="star-plus-outline" size={22} />
+          </Pressable>
+        ) : null}
       </View>
       <ArrivalsContent listFooterComponent={quickSwitchFooter} query={query} />
-      <SavePresetModal
+      {showSavePreset ? (
+        <SavePresetModal
+          lineCode={line.codigo}
+          location={location}
+          onClose={() => setIsSaving(false)}
+          stop={stop}
+          visible={isSaving}
+        />
+      ) : null}
+      <ArrivalMapModal
+        arrivals={query.data}
+        direction={stop.abreviaturaBandera}
+        isRefreshing={query.isFetching}
         lineCode={line.codigo}
-        onClose={() => setIsSaving(false)}
+        onClose={() => setIsMapVisible(false)}
+        onRefresh={() => void query.refetch()}
         stop={stop}
-        visible={isSaving}
+        visible={isMapVisible}
       />
     </StepLayout>
   );
@@ -370,6 +553,7 @@ function ArrivalsContent({
   listFooterComponent?: React.ReactElement;
   query: UseQueryResult<ArrivalResponseDTO, Error>;
 }) {
+  const now = useArrivalClock();
   if (query.isPending) return <LoadingState label="Consultando arribos" />;
   if (query.isError) return <ErrorState error={query.error} onRetry={() => void query.refetch()} />;
   if (query.data.arrivals.length === 0)
@@ -387,7 +571,7 @@ function ArrivalsContent({
         `${arrival.lineCode ?? 'linea'}:${arrival.estimatedArrivalTime ?? 'sin-hora'}`
       }
       ListFooterComponent={listFooterComponent}
-      renderItem={({ item }) => <ArrivalCard arrival={item} />}
+      renderItem={({ item }) => <ArrivalCard arrival={item} now={now} />}
     />
   );
 }
@@ -548,8 +732,9 @@ function QuickSwitchPanel({
 
 // ---------- Arrival card ----------
 
-function ArrivalCard({ arrival }: { arrival: BusArrival }) {
-  const visualMinutes = useArrivalTicker(arrival);
+function ArrivalCard({ arrival, now }: { arrival: BusArrival; now: number }) {
+  const visualMinutes = getVisualRemainingMinutes(arrival, now);
+  const clockTime = getArrivalClockTime(visualMinutes, now);
   const reliable = arrival.status !== 'EXPIRED';
   return (
     <View className="mb-3 rounded-2xl bg-[#1E1E24] p-4">
@@ -559,12 +744,12 @@ function ArrivalCard({ arrival }: { arrival: BusArrival }) {
             Coche {arrival.vehicleUnit ?? 'Sin identificar'}
           </Text>
           <Text className="mt-1 text-3xl font-bold text-[#E1E1E6]">
-            {reliable && visualMinutes !== null ? `${visualMinutes} min` : 'ETA no confiable'}
+            {reliable && visualMinutes !== null
+              ? formatVisualArrivalMinutes(visualMinutes)
+              : 'ETA no confiable'}
           </Text>
-          {arrival.estimatedArrivalTime ? (
-            <Text className="mt-1 text-sm text-[#A4A4AB]">
-              Hora estimada: {arrival.estimatedArrivalTime}
-            </Text>
+          {reliable && clockTime ? (
+            <Text className="mt-1 text-sm text-[#A4A4AB]">Llegada aprox. {clockTime}</Text>
           ) : null}
         </View>
         <TelemetryBadge status={arrival.status} />
@@ -590,11 +775,13 @@ function ArrivalCard({ arrival }: { arrival: BusArrival }) {
 
 function SavePresetModal({
   lineCode,
+  location,
   onClose,
   stop,
   visible,
 }: {
   lineCode: string;
+  location?: string;
   onClose: () => void;
   stop: TransitStopWithFlagDTO;
   visible: boolean;
@@ -622,6 +809,7 @@ function SavePresetModal({
         alias: normalizedAlias,
         icon: 'bus',
         color: '#80D4FF',
+        location: location ?? null,
         activeSchedule: null,
         notificationSettings: null,
       },
@@ -645,7 +833,9 @@ function SavePresetModal({
             value={alias}
           />
           {mutation.error ? (
-            <Text className="mt-3 text-sm text-[#E5B842]">{getErrorMessage(mutation.error)}</Text>
+            <Text className="mt-3 text-sm text-[#E5B842]">
+              {getErrorMessage(mutation.error, 'No se pudo completar la consulta.')}
+            </Text>
           ) : null}
           <View className="mt-5 flex-row gap-3">
             <Pressable
@@ -668,152 +858,4 @@ function SavePresetModal({
   );
 }
 
-function TelemetryBadge({ status }: { status: TelemetryStatus }) {
-  const color =
-    status === 'LIVE'
-      ? { bg: '#0E2B18', text: '#6CD58A', label: 'En vivo' }
-      : status === 'ESTIMATED_FALLBACK'
-        ? { bg: '#332500', text: '#E5B842', label: 'Estimado' }
-        : { bg: '#28282C', text: '#8E8E93', label: 'Vencido' };
-  return (
-    <View className="rounded-full px-3 py-1.5" style={{ backgroundColor: color.bg }}>
-      <Text className="text-xs font-semibold" style={{ color: color.text }}>
-        {color.label}
-      </Text>
-    </View>
-  );
-}
-
-function ArrivalDetail({
-  icon,
-  value,
-}: {
-  icon: React.ComponentProps<typeof MaterialCommunityIcons>['name'];
-  value: string;
-}) {
-  return (
-    <View className="flex-row items-center gap-1.5">
-      <MaterialCommunityIcons color="#A4A4AB" name={icon} size={16} />
-      <Text className="text-sm text-[#A4A4AB]">{value}</Text>
-    </View>
-  );
-}
-
-function CatalogList<T>({
-  data,
-  emptyMessage,
-  keyExtractor,
-  query,
-  renderItem,
-}: {
-  data: T[];
-  emptyMessage: string;
-  keyExtractor: (item: T) => string;
-  query: UseQueryResult<T[], Error>;
-  renderItem: ListRenderItem<T>;
-}) {
-  if (query.isPending) return <LoadingState label="Cargando datos" />;
-  if (query.isError) return <ErrorState error={query.error} onRetry={() => void query.refetch()} />;
-  if (data.length === 0) return <EmptyState label={emptyMessage} />;
-  return <FlashList data={data} keyExtractor={keyExtractor} renderItem={renderItem} />;
-}
-
-function StepLayout({
-  children,
-  location,
-  onBack,
-  subtitle,
-  title,
-}: {
-  children: React.ReactNode;
-  location?: string;
-  onBack?: () => void;
-  subtitle: string;
-  title: string;
-}) {
-  return (
-    <View className="flex-1 bg-[#121212] px-5 pt-5">
-      <View className="mb-5 flex-row items-center gap-3">
-        {onBack ? (
-          <Pressable
-            accessibilityLabel="Volver"
-            className="rounded-xl bg-[#25252B] p-2"
-            onPress={onBack}>
-            <MaterialCommunityIcons color="#E1E1E6" name="arrow-left" size={22} />
-          </Pressable>
-        ) : null}
-        <View className="flex-1">
-          <Text className="text-2xl font-bold text-[#E1E1E6]">{title}</Text>
-          {location ? (
-            <Text className="mt-0.5 text-sm font-medium text-[#E1E1E6]" numberOfLines={3}>
-              {location}
-            </Text>
-          ) : null}
-          <Text className="mt-0.5 text-sm text-[#A4A4AB]">{subtitle}</Text>
-        </View>
-      </View>
-      <View className="flex-1">{children}</View>
-    </View>
-  );
-}
-
-function CatalogRow({
-  detail,
-  onPress,
-  title,
-}: {
-  detail?: string;
-  onPress: () => void;
-  title: string;
-}) {
-  const showDetail = Boolean(detail && detail.trim().toLowerCase() !== title.trim().toLowerCase());
-
-  return (
-    <Pressable className="mb-2 rounded-2xl bg-[#1E1E24] p-4 active:opacity-70" onPress={onPress}>
-      <View className="flex-row items-center gap-3">
-        <View className="h-9 w-9 items-center justify-center rounded-xl bg-[#25252B]">
-          <MaterialCommunityIcons color="#80D4FF" name="bus" size={19} />
-        </View>
-        <View className="flex-1">
-          <Text className="text-base font-semibold text-[#E1E1E6]">{title}</Text>
-          {showDetail ? <Text className="mt-1 text-sm text-[#A4A4AB]">{detail}</Text> : null}
-        </View>
-        <MaterialCommunityIcons color="#A4A4AB" name="chevron-right" size={22} />
-      </View>
-    </Pressable>
-  );
-}
-
-function LoadingState({ label }: { label: string }) {
-  return (
-    <View className="flex-1 items-center justify-center gap-3">
-      <ActivityIndicator color="#80D4FF" />
-      <Text className="text-base text-[#A4A4AB]">{label}</Text>
-    </View>
-  );
-}
-function EmptyState({ label }: { label: string }) {
-  return (
-    <View className="flex-1 items-center justify-center px-6">
-      <MaterialCommunityIcons color="#8E8E93" name="bus-alert" size={32} />
-      <Text className="mt-3 text-center text-base text-[#A4A4AB]">{label}</Text>
-    </View>
-  );
-}
-function ErrorState({ error, onRetry }: { error: Error; onRetry: () => void }) {
-  return (
-    <View className="flex-1 items-center justify-center px-6">
-      <MaterialCommunityIcons color="#E5B842" name="alert-circle-outline" size={32} />
-      <Text className="mt-3 text-center text-base text-[#E1E1E6]">{getErrorMessage(error)}</Text>
-      <Pressable className="mt-4 rounded-xl bg-[#25252B] px-4 py-3" onPress={onRetry}>
-        <Text className="font-semibold text-[#80D4FF]">Reintentar</Text>
-      </Pressable>
-    </View>
-  );
-}
-function getErrorMessage(error: Error): string {
-  return error instanceof ProblemDetailError
-    ? error.problem.detail
-    : error.message || 'No se pudo completar la consulta.';
-}
 type StepProps<T> = { onBack: () => void; onSelect: (item: T) => void };

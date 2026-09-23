@@ -21,7 +21,6 @@ export default function LoginScreen() {
     <AuthForm
       error={mutation.error}
       isSubmitting={mutation.isPending}
-      mode="login"
       onSubmit={({ email, password }) => mutation.mutate({ email, password } satisfies AuthRequest)}
     />
   );

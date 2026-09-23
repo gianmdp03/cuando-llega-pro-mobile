@@ -37,7 +37,10 @@ export async function getAuthToken(): Promise<string | null> {
 export async function setAuthSession(response: AuthResponse): Promise<AuthSession> {
   await requireSecureStorage();
 
-  const expiresAt = new Date(Date.now() + response.expiresIn).toISOString();
+  const expiresAt =
+    response.expiresIn > 0
+      ? new Date(Date.now() + response.expiresIn).toISOString()
+      : 'NO_EXPIRATION';
   const user = response.user;
 
   await SecureStore.setItemAsync(AUTH_TOKEN_KEY, response.token);
@@ -65,10 +68,17 @@ export async function getAuthSession(): Promise<AuthSession | null> {
   try {
     const user: unknown = JSON.parse(serializedUser);
 
-    const expiresAtTime = Date.parse(expiresAt);
-    if (!isAuthenticatedUser(user) || Number.isNaN(expiresAtTime) || expiresAtTime <= Date.now()) {
+    if (!isAuthenticatedUser(user)) {
       await clearAuthSession();
       return null;
+    }
+
+    if (expiresAt !== 'NO_EXPIRATION') {
+      const expiresAtTime = Date.parse(expiresAt);
+      if (Number.isNaN(expiresAtTime) || expiresAtTime <= Date.now()) {
+        await clearAuthSession();
+        return null;
+      }
     }
 
     return { token, expiresAt, user };

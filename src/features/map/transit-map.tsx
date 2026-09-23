@@ -107,9 +107,9 @@ export function TransitMap() {
     () =>
       (routesQuery.data ?? [])
         .filter((route) => routeMatchesDirection(route, direction))
-        .map(createRouteLine)
+        .map((route) => createRouteLine(route, markers))
         .filter((route): route is RenderedRoute => route !== null),
-    [direction, routesQuery.data]
+    [direction, markers, routesQuery.data]
   );
   const stopFeatures = useMemo<GeoJSON.FeatureCollection>(
     () => ({
@@ -160,7 +160,7 @@ export function TransitMap() {
             />
           </GeoJSONSource>
         ))}
-        <GeoJSONSource data={arrowFeatures} id="transit-route-arrows">
+        <GeoJSONSource data={arrowFeatures} id="transit-route-arrows" key="transit-route-arrows-v2">
           <Layer
             id="transit-route-arrow-symbols"
             layout={{
@@ -169,7 +169,7 @@ export function TransitMap() {
               'icon-ignore-placement': true,
               'icon-rotate': ['get', 'bearing'],
               'icon-rotation-alignment': 'map',
-              'icon-size': 0.24,
+              'icon-size': 0.5,
             }}
             type="symbol"
           />
@@ -251,6 +251,7 @@ type RouteArrow = { lngLat: LngLat; bearing: number };
 type RenderedRoute = { id: string; line: RouteLine; arrows: RouteArrow[] };
 
 const ROUTE_ARROW_SPACING_METERS = 400;
+const ROUTE_ARROW_MINIMUM_STOP_DISTANCE_METERS = 30;
 const STOP_TAP_RADIUS_METERS = 65;
 
 function routeMatchesDirection(route: MapRoute, direction: string | null): boolean {
@@ -263,7 +264,7 @@ function routeMatchesDirection(route: MapRoute, direction: string | null): boole
   return (route.description ?? '').split(';').some((field) => field.trim() === direction);
 }
 
-function createRouteLine(route: MapRoute): RenderedRoute | null {
+function createRouteLine(route: MapRoute, stops: MapStop[]): RenderedRoute | null {
   const coordinates = route.coordinates.map(
     ([longitude, latitude]) => [longitude, latitude] as LngLat
   );
@@ -272,7 +273,15 @@ function createRouteLine(route: MapRoute): RenderedRoute | null {
     ? {
         id: route.id,
         line: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates } },
-        arrows: createRouteArrows(coordinates),
+        arrows: createRouteArrows(coordinates).filter(({ lngLat }) =>
+          stops.every(
+            (stop) =>
+              stop.longitude === null ||
+              stop.latitude === null ||
+              distanceMeters(lngLat, [stop.longitude, stop.latitude]) >=
+                ROUTE_ARROW_MINIMUM_STOP_DISTANCE_METERS
+          )
+        ),
       }
     : null;
 }

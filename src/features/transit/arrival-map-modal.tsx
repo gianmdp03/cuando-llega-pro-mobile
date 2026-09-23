@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 import { ActivityIndicator, Modal, Pressable, Text, View } from 'react-native';
 
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -13,12 +13,18 @@ import {
   type LngLat,
   Map,
   type StyleSpecification,
+  ViewAnnotation,
+  type ViewAnnotationRef,
 } from '@maplibre/maplibre-react-native';
 
 import type { ArrivalResponseDTO, MapRoute, TransitStopWithFlagDTO } from '@/src/types/api';
 import { getMapRoutes } from '@/src/features/map/api';
 import { distanceMeters as geoDistanceMeters } from '@/src/features/map/geo';
 import { queryKeys } from '@/src/lib/query-client';
+import {
+  getVisualRemainingMinutes,
+  useArrivalClock,
+} from '@/src/features/transit/use-arrival-ticker';
 
 const OSM_STYLE = {
   version: 8,
@@ -74,6 +80,8 @@ export function ArrivalMapModal({
   visible: boolean;
 }) {
   const cameraRef = useRef<CameraRef>(null);
+  const vehicleLabelRefs = useRef(new globalThis.Map<string, ViewAnnotationRef>());
+  const now = useArrivalClock();
   const routesQuery = useQuery({
     queryKey: queryKeys.map.routes(lineCode),
     queryFn: () => getMapRoutes(lineCode),
@@ -84,12 +92,48 @@ export function ArrivalMapModal({
     arrivals?.stopLongitude ?? stop.longitudParada,
     arrivals?.stopLatitude ?? stop.latitudParada
   );
-  const vehicles = (arrivals?.arrivals ?? []).flatMap((arrival) => {
-    const position = toLngLat(arrival.longitude, arrival.latitude);
-    return position
-      ? [{ id: arrival.vehicleUnit ?? `${arrival.lineCode}:${position.join(':')}`, position }]
-      : [];
-  });
+  const vehicles = useMemo(
+    () =>
+      (arrivals?.arrivals ?? []).flatMap((arrival) => {
+        const position = toLngLat(arrival.longitude, arrival.latitude);
+        return position
+          ? [
+              {
+                arrival,
+                id: arrival.vehicleUnit ?? `${arrival.lineCode}:${position.join(':')}`,
+                position,
+              },
+            ]
+          : [];
+      }),
+    [arrivals?.arrivals]
+  );
+  const vehicleLabels = useMemo(
+    () =>
+      vehicles.map(({ arrival, id, position }) => ({
+        arrivalLabel: formatVehicleArrivalLabel(getVisualRemainingMinutes(arrival, now)),
+        id,
+        position,
+      })),
+    [now, vehicles]
+  );
+  const vehicleLabelSignature = vehicleLabels
+    .map(({ arrivalLabel, id }) => `${id}:${arrivalLabel ?? ''}`)
+    .join('|');
+  const setVehicleLabelRef = useCallback((id: string, annotation: ViewAnnotationRef | null) => {
+    if (annotation) vehicleLabelRefs.current.set(id, annotation);
+    else vehicleLabelRefs.current.delete(id);
+  }, []);
+
+  useEffect(() => {
+    if (!visible) return;
+
+    const refreshTimer = setTimeout(() => {
+      vehicleLabelRefs.current.forEach((annotation) => annotation.refresh());
+    }, 30);
+    return () => clearTimeout(refreshTimer);
+  }, [vehicleLabelSignature, visible]);
+
   const stopFeatures = useMemo<GeoJSON.FeatureCollection>(
     () => ({
       type: 'FeatureCollection',
@@ -272,6 +316,17 @@ export function ArrivalMapModal({
                   type="symbol"
                 />
               </GeoJSONSource>
+              {vehicleLabels.map(({ arrivalLabel, id, position }) =>
+                arrivalLabel ? (
+                  <VehicleArrivalLabel
+                    arrivalLabel={arrivalLabel}
+                    id={id}
+                    key={`arrival-label-${id}`}
+                    onRef={setVehicleLabelRef}
+                    position={position}
+                  />
+                ) : null
+              )}
             </Map>
 
             <View className="absolute left-3 right-3 top-3 flex-row justify-between">
@@ -303,6 +358,36 @@ export function ArrivalMapModal({
       </View>
     </Modal>
   );
+}
+
+const VehicleArrivalLabel = memo(function VehicleArrivalLabel({
+  arrivalLabel,
+  id,
+  onRef,
+  position,
+}: {
+  arrivalLabel: string;
+  id: string;
+  onRef: (id: string, annotation: ViewAnnotationRef | null) => void;
+  position: LngLat;
+}) {
+  return (
+    <ViewAnnotation
+      anchor="bottom"
+      id={`arrival-label-${id}`}
+      lngLat={position}
+      offset={[0, -17]}
+      ref={(annotation) => onRef(id, annotation)}>
+      <View className="rounded bg-[#121212] px-1.5 py-0.5">
+        <Text className="text-xs font-semibold text-[#E1E1E6]">{arrivalLabel}</Text>
+      </View>
+    </ViewAnnotation>
+  );
+});
+
+function formatVehicleArrivalLabel(remainingMinutes: number | null): string | null {
+  if (remainingMinutes === null) return null;
+  return remainingMinutes === 0 ? '<1 min' : `${remainingMinutes} min`;
 }
 
 function toLngLat(

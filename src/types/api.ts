@@ -205,25 +205,11 @@ export type AuthResponse = {
   user: AuthenticatedUser;
 };
 
-export type PresetSchedule = {
-  startTime: string;
-  endTime: string;
-  activeDays: string[];
-};
-
-export type PresetNotificationSettings = {
-  notifyArrival: boolean;
-  alertMinutesBefore: number | null;
-  soundEnabled: boolean;
-};
-
 export type PresetConfig = {
   alias: string;
   icon: string;
   color: string;
   location?: string | null;
-  activeSchedule: PresetSchedule | null;
-  notificationSettings: PresetNotificationSettings | null;
 };
 
 export type PresetRequestDTO = {

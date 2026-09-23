@@ -1,5 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Modal, Pressable, Text, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
+import {
+  BackHandler,
+  Modal,
+  Platform,
+  Pressable,
+  Text,
+  TextInput,
+  ToastAndroid,
+  View,
+} from 'react-native';
 import Animated, {
   cancelAnimation,
   useAnimatedStyle,
@@ -64,6 +74,33 @@ const CATALOG_OPTIONS = { staleTime: 5 * 60_000, gcTime: 30 * 60_000, retry: 0 }
 
 export function LegacyTransitFlow() {
   const [selection, setSelection] = useState<Selection>({});
+  const exitPressTime = useRef(0);
+
+  useFocusEffect(
+    useCallback(() => {
+      const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+        if (Platform.OS !== 'android') return false;
+
+        if (selection.line) {
+          setSelection({});
+          exitPressTime.current = 0;
+          return true;
+        }
+
+        const now = Date.now();
+        if (now - exitPressTime.current < 2_000) {
+          BackHandler.exitApp();
+          return true;
+        }
+
+        exitPressTime.current = now;
+        ToastAndroid.show('Tocá atrás nuevamente para cerrar', ToastAndroid.SHORT);
+        return true;
+      });
+
+      return () => subscription.remove();
+    }, [selection.line])
+  );
 
   if (!selection.line) return <LinesStep onSelect={(line) => setSelection({ line })} />;
   if (!selection.street) {
@@ -470,56 +507,48 @@ function ArrivalsStep({
           {query.isSuccess && query.data.status ? (
             <TelemetryBadge prominent status={query.data.status} />
           ) : null}
-          <View className="flex-row gap-2">
+          {showSavePreset ? (
             <Pressable
-              accessibilityLabel="Mostrar mapa de arribos"
+              accessibilityLabel="Guardar acceso rápido"
               accessibilityRole="button"
-              className="flex-row items-center rounded-xl bg-[#25252B] px-3 py-2 active:opacity-70"
-              onPress={() => setIsMapVisible(true)}>
-              <MaterialCommunityIcons color="#80D4FF" name="map-outline" size={18} />
-              <Text className="ml-2 text-sm font-semibold text-[#E1E1E6]">Mapa</Text>
+              className="flex-row items-center rounded-xl bg-[#25252B] px-2 py-2 active:opacity-70"
+              onPress={() => setIsSaving(true)}>
+              <MaterialCommunityIcons color="#80D4FF" name="star-plus-outline" size={18} />
+              <Text className="ml-1.5 text-xs font-semibold text-[#E1E1E6]">Guardar</Text>
             </Pressable>
-            <Pressable
-              accessibilityLabel="Actualizar arribos"
-              accessibilityRole="button"
-              className="flex-row items-center rounded-xl bg-[#25252B] px-3 py-2 active:opacity-70"
-              disabled={query.isFetching}
-              onPress={() => void query.refetch()}>
-              <Animated.View style={iconStyle}>
-                <MaterialCommunityIcons
-                  color={query.isFetching ? '#4A90A4' : '#80D4FF'}
-                  name="refresh"
-                  size={18}
-                />
-              </Animated.View>
-              <Text
-                className="ml-2 text-sm font-semibold"
-                style={{ color: query.isFetching ? '#4A90A4' : '#E1E1E6' }}>
-                {query.isFetching ? 'Actualizando…' : 'Actualizar'}
-              </Text>
-            </Pressable>
-          </View>
+          ) : null}
+          <Pressable
+            accessibilityLabel="Mostrar mapa de arribos"
+            accessibilityRole="button"
+            className="flex-row items-center rounded-xl bg-[#25252B] px-2 py-2 active:opacity-70"
+            onPress={() => setIsMapVisible(true)}>
+            <MaterialCommunityIcons color="#80D4FF" name="map-outline" size={18} />
+            <Text className="ml-1.5 text-xs font-semibold text-[#E1E1E6]">Mapa</Text>
+          </Pressable>
+          <Pressable
+            accessibilityLabel="Actualizar arribos"
+            accessibilityRole="button"
+            className="flex-row items-center rounded-xl bg-[#25252B] px-2 py-2 active:opacity-70"
+            disabled={query.isFetching}
+            onPress={() => void query.refetch()}>
+            <Animated.View style={iconStyle}>
+              <MaterialCommunityIcons
+                color={query.isFetching ? '#4A90A4' : '#80D4FF'}
+                name="refresh"
+                size={18}
+              />
+            </Animated.View>
+            <Text
+              className="ml-1.5 text-xs font-semibold"
+              style={{ color: query.isFetching ? '#4A90A4' : '#E1E1E6' }}>
+              {query.isFetching ? 'Actualizando…' : 'Actualizar'}
+            </Text>
+          </Pressable>
         </View>
         {lastUpdatedLabel ? (
           <Text className="mt-2 text-sm text-[#8E8E93]" numberOfLines={1}>
             {query.isFetching ? 'Consultando…' : `Última actualización: ${lastUpdatedLabel}`}
           </Text>
-        ) : null}
-      </View>
-      <View className="mb-3 flex-row items-center justify-between rounded-2xl bg-[#1E1E24] p-4">
-        <View className="flex-1">
-          <Text className="text-sm text-[#A4A4AB]">Parada</Text>
-          <Text className="mt-1 text-base font-semibold text-[#E1E1E6]">{stop.descripcion}</Text>
-          <Text className="mt-1 text-sm text-[#A4A4AB]">{stop.identificador}</Text>
-        </View>
-        {showSavePreset ? (
-          <Pressable
-            accessibilityLabel="Guardar acceso rápido"
-            accessibilityRole="button"
-            className="rounded-xl bg-[#25252B] p-3 active:opacity-70"
-            onPress={() => setIsSaving(true)}>
-            <MaterialCommunityIcons color="#80D4FF" name="star-plus-outline" size={22} />
-          </Pressable>
         ) : null}
       </View>
       <ArrivalsContent listFooterComponent={quickSwitchFooter} query={query} />
@@ -810,8 +839,6 @@ function SavePresetModal({
         icon: 'bus',
         color: '#80D4FF',
         location: location ?? null,
-        activeSchedule: null,
-        notificationSettings: null,
       },
     };
     mutation.mutate(request);

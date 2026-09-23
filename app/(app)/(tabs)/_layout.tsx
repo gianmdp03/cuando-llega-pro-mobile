@@ -8,6 +8,7 @@ import { useAuth } from '@/src/providers/auth-provider';
 const TAB_ICONS = {
   lines: 'format-list-bulleted' as const,
   map: 'map-outline' as const,
+  nearby: 'map-marker-radius-outline' as const,
   favorites: 'star-outline' as const,
 };
 
@@ -71,6 +72,7 @@ export default function TabsLayout() {
       })}>
       <Tabs.Screen name="lines" options={{ title: 'Líneas' }} />
       <Tabs.Screen name="map" options={{ title: 'Mapa' }} />
+      <Tabs.Screen name="nearby" options={{ title: 'Paradas cercanas' }} />
       <Tabs.Screen name="favorites" options={{ title: 'Favoritos' }} />
     </Tabs>
   );

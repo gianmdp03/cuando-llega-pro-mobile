@@ -90,6 +90,15 @@ export type MapStopDetail = {
   directions: MapStopDirection[];
 };
 
+export type NearbyMapStop = {
+  identifier: string;
+  description: string | null;
+  latitude: number;
+  longitude: number;
+  distanceMeters: number;
+  directions: MapStopDirection[];
+};
+
 export type StopDirectionArrivals = {
   direction: string;
   expandedDirection: string | null;

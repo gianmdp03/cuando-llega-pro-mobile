@@ -1,5 +1,12 @@
 import { apiClient } from '@/src/lib/api-client';
-import type { DirectionDto, MapLine, MapRoute, MapStop, MapStopDetail } from '@/src/types/api';
+import type {
+  DirectionDto,
+  MapLine,
+  MapRoute,
+  MapStop,
+  MapStopDetail,
+  NearbyMapStop,
+} from '@/src/types/api';
 
 const MAP_PATH = '/api/v1/transit/map';
 
@@ -17,6 +24,19 @@ export function getMapStops(commercialCode: string, direction: string): Promise<
   return apiClient.get<MapStop[]>(
     `${MAP_PATH}/lines/${encodeURIComponent(commercialCode)}/stops?direction=${encodeURIComponent(direction)}`
   );
+}
+
+export function getNearbyMapStops(
+  latitude: number,
+  longitude: number,
+  radiusMeters: number
+): Promise<NearbyMapStop[]> {
+  const search = new URLSearchParams({
+    latitude: String(latitude),
+    longitude: String(longitude),
+    radiusMeters: String(radiusMeters),
+  });
+  return apiClient.get<NearbyMapStop[]>(`${MAP_PATH}/stops/nearby?${search.toString()}`);
 }
 
 export function getMapRoutes(commercialCode: string): Promise<MapRoute[]> {

@@ -32,6 +32,8 @@ export const queryKeys = {
     directions: (commercialLineCode: string) => ['map', 'directions', commercialLineCode] as const,
     stops: (commercialLineCode: string, direction: string) =>
       ['map', 'stops', commercialLineCode, direction] as const,
+    nearbyStops: (latitude: number, longitude: number, radiusMeters: number) =>
+      ['map', 'nearby-stops', latitude, longitude, radiusMeters] as const,
     routes: (commercialLineCode: string) => ['map', 'routes', commercialLineCode] as const,
     stop: (identifier: string) => ['map', 'stop', identifier] as const,
     arrivals: (identifier: string) => ['map', 'arrivals', identifier] as const,

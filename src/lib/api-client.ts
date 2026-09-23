@@ -83,7 +83,10 @@ export async function apiRequest<TResponse, TBody = undefined>(
   }, timeoutMs);
 
   try {
-    const token = await getAuthToken();
+    // Login requests cannot benefit from an existing bearer token. Skipping
+    // SecureStore here makes the first sign-in request independent from its
+    // read latency (and avoids a needless device-storage operation).
+    const token = path.includes('/auth/') ? null : await getAuthToken();
     const headers = new Headers(options.headers);
     headers.set('Accept', 'application/json');
 
@@ -121,6 +124,11 @@ export async function apiRequest<TResponse, TBody = undefined>(
     return (text ? JSON.parse(text) : undefined) as TResponse;
   } catch (error) {
     if (error instanceof ProblemDetailError || error instanceof ApiConfigurationError) {
+      throw error;
+    }
+
+    // Preserve React Query cancellations instead of presenting them as network failures.
+    if (options.signal?.aborted) {
       throw error;
     }
 

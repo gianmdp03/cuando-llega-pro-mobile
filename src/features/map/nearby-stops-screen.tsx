@@ -1,6 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, Text, View } from 'react-native';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  type GestureResponderEvent,
+  Modal,
+  Pressable,
+  Text,
+  View,
+} from 'react-native';
 
+import { FlashList } from '@shopify/flash-list';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useQuery } from '@tanstack/react-query';
@@ -11,34 +19,17 @@ import {
   Layer,
   type LngLat,
   Map,
-  type StyleSpecification,
 } from '@maplibre/maplibre-react-native';
 
-import { getNearbyMapStops } from '@/src/features/map/api';
+import { getNearbyMapStops, getReverseGeocoding } from '@/src/features/map/api';
+import { OSM_STYLE } from '@/src/features/map/map-style';
 import { StopSheet } from '@/src/features/map/stop-sheet';
 import { MAP_IMAGES } from '@/src/features/transit/arrival-map-modal';
 import { queryKeys } from '@/src/lib/query-client';
 import type { MapStopDetail, NearbyMapStop } from '@/src/types/api';
 
 const RADIUS_OPTIONS = [200, 300, 400, 500, 600, 700, 800] as const;
-const OSM_STYLE = {
-  version: 8,
-  name: 'OpenStreetMap',
-  sources: {
-    openstreetmap: {
-      type: 'raster',
-      tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-      tileSize: 256,
-      minzoom: 1,
-      maxzoom: 19,
-      attribution: '© OpenStreetMap contributors',
-    },
-  },
-  layers: [
-    { id: 'background', type: 'background', paint: { 'background-color': '#121212' } },
-    { id: 'openstreetmap', type: 'raster', source: 'openstreetmap' },
-  ],
-} satisfies StyleSpecification;
+const LOCATION_CACHE_PRECISION = 10_000;
 
 export function NearbyStopsScreen() {
   const [radiusMeters, setRadiusMeters] = useState<(typeof RADIUS_OPTIONS)[number]>(500);
@@ -47,24 +38,54 @@ export function NearbyStopsScreen() {
   const [locationError, setLocationError] = useState<string | null>(null);
   const [selectedStop, setSelectedStop] = useState<NearbyMapStop | null>(null);
   const [mapStop, setMapStop] = useState<NearbyMapStop | null>(null);
+  const [revealedAddresses, setRevealedAddresses] = useState<Record<string, string>>({});
+  const [revealingStopIds, setRevealingStopIds] = useState<ReadonlySet<string>>(new Set());
+  const [coolingDownStopIds, setCoolingDownStopIds] = useState<ReadonlySet<string>>(new Set());
+  const activeRevealIdsRef = useRef(new Set<string>());
+  const revealControllersRef = useRef(new globalThis.Map<string, AbortController>());
+  const cooldownTimersRef = useRef(new globalThis.Map<string, ReturnType<typeof setTimeout>>());
+  const locationRequestIdRef = useRef(0);
+  const isMountedRef = useRef(true);
 
   const refreshLocation = async () => {
+    const requestId = ++locationRequestIdRef.current;
     setIsLocating(true);
     setLocationError(null);
+    let lastKnownPosition: Location.LocationObject | null = null;
     try {
-      const permission = await Location.requestForegroundPermissionsAsync();
+      let permission = await Location.getForegroundPermissionsAsync();
       if (permission.status !== Location.PermissionStatus.GRANTED) {
-        setLocationError('Necesitamos tu ubicación para buscar paradas cercanas.');
+        permission = await Location.requestForegroundPermissionsAsync();
+      }
+      if (permission.status !== Location.PermissionStatus.GRANTED) {
+        if (requestId === locationRequestIdRef.current) {
+          setLocationError('Necesitamos tu ubicación para buscar paradas cercanas.');
+        }
         return;
       }
+      lastKnownPosition = await Location.getLastKnownPositionAsync({
+        maxAge: 60_000,
+        requiredAccuracy: Location.Accuracy.Balanced,
+      });
       const position = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Highest,
       });
-      setLocation([position.coords.longitude, position.coords.latitude]);
+      if (requestId === locationRequestIdRef.current) {
+        setLocation([position.coords.longitude, position.coords.latitude]);
+      }
     } catch {
-      setLocationError('No se pudo obtener tu ubicación.');
+      // A cached fix is a useful fallback when a fresh high-accuracy reading
+      // fails, but using it optimistically would issue a second nearby-stops
+      // request whenever the two positions round to different cache cells.
+      if (lastKnownPosition && requestId === locationRequestIdRef.current) {
+        setLocation([lastKnownPosition.coords.longitude, lastKnownPosition.coords.latitude]);
+      } else if (requestId === locationRequestIdRef.current) {
+        setLocationError('No se pudo obtener tu ubicación.');
+      }
     } finally {
-      setIsLocating(false);
+      if (requestId === locationRequestIdRef.current) {
+        setIsLocating(false);
+      }
     }
   };
 
@@ -72,9 +93,30 @@ export function NearbyStopsScreen() {
     void Promise.resolve().then(refreshLocation);
   }, []);
 
+  useEffect(() => {
+    const timers = cooldownTimersRef.current;
+    const controllers = revealControllersRef.current;
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      timers.forEach(clearTimeout);
+      controllers.forEach((controller) => controller.abort());
+    };
+  }, []);
+
   const nearbyStopsQuery = useQuery({
-    queryKey: queryKeys.map.nearbyStops(location?.[1] ?? 0, location?.[0] ?? 0, radiusMeters),
-    queryFn: () => getNearbyMapStops(location![1], location![0], radiusMeters),
+    queryKey: queryKeys.map.nearbyStops(
+      normalizeLocationCoordinate(location?.[1] ?? 0),
+      normalizeLocationCoordinate(location?.[0] ?? 0),
+      radiusMeters
+    ),
+    queryFn: ({ signal }) =>
+      getNearbyMapStops(
+        normalizeLocationCoordinate(location![1]),
+        normalizeLocationCoordinate(location![0]),
+        radiusMeters,
+        signal
+      ),
     enabled: !!location,
     staleTime: 60_000,
     gcTime: 5 * 60_000,
@@ -93,93 +135,113 @@ export function NearbyStopsScreen() {
     [selectedStop]
   );
 
+  const stops = nearbyStopsQuery.data ?? [];
+
+  // Stable callbacks for renderItem — these do not change between renders unless
+  // setMapStop / setSelectedStop themselves change (they never do).
+  const handleMapPress = useCallback((stop: NearbyMapStop) => setMapStop(stop), []);
+  const handleStopPress = useCallback((stop: NearbyMapStop) => setSelectedStop(stop), []);
+  const handleRevealLocation = useCallback(async (stop: NearbyMapStop) => {
+    if (activeRevealIdsRef.current.has(stop.identifier)) {
+      return;
+    }
+
+    activeRevealIdsRef.current.add(stop.identifier);
+    const controller = new AbortController();
+    revealControllersRef.current.set(stop.identifier, controller);
+    setRevealingStopIds((previous) => new Set(previous).add(stop.identifier));
+    setCoolingDownStopIds((previous) => new Set(previous).add(stop.identifier));
+    try {
+      const response = await getReverseGeocoding(stop.latitude, stop.longitude, controller.signal);
+      setRevealedAddresses((previous) => ({
+        ...previous,
+        [stop.identifier]: response.formattedAddress,
+      }));
+    } catch {
+      // Keep the button available after its cooldown so this stop can be retried.
+    } finally {
+      activeRevealIdsRef.current.delete(stop.identifier);
+      revealControllersRef.current.delete(stop.identifier);
+      if (!isMountedRef.current) {
+        return;
+      }
+      setRevealingStopIds((previous) => {
+        const next = new Set(previous);
+        next.delete(stop.identifier);
+        return next;
+      });
+      const previousTimer = cooldownTimersRef.current.get(stop.identifier);
+      if (previousTimer) {
+        clearTimeout(previousTimer);
+      }
+      cooldownTimersRef.current.set(
+        stop.identifier,
+        setTimeout(() => {
+          setCoolingDownStopIds((previous) => {
+            const next = new Set(previous);
+            next.delete(stop.identifier);
+            return next;
+          });
+          cooldownTimersRef.current.delete(stop.identifier);
+        }, 5000)
+      );
+    }
+  }, []);
+
+  const renderItem = useCallback(
+    ({ item }: { item: NearbyMapStop }) => (
+      <NearbyStopCard
+        address={revealedAddresses[item.identifier]}
+        isCoolingDown={coolingDownStopIds.has(item.identifier)}
+        isRevealing={revealingStopIds.has(item.identifier)}
+        onMap={handleMapPress}
+        onPress={handleStopPress}
+        onRevealLocation={handleRevealLocation}
+        stop={item}
+      />
+    ),
+    [
+      coolingDownStopIds,
+      handleMapPress,
+      handleRevealLocation,
+      handleStopPress,
+      revealedAddresses,
+      revealingStopIds,
+    ]
+  );
+
+  const keyExtractor = useCallback((item: NearbyMapStop) => item.identifier, []);
+
+  const ListHeader = (
+    <ListHeaderComponent
+      isLocating={isLocating}
+      location={location}
+      locationError={locationError}
+      nearbyStopsQuery={nearbyStopsQuery}
+      onRefreshLocation={() => void refreshLocation()}
+      radiusMeters={radiusMeters}
+      onRadiusChange={setRadiusMeters}
+    />
+  );
+
+  const ListEmpty =
+    !nearbyStopsQuery.isPending && !nearbyStopsQuery.isError && location ? (
+      <View className="items-center py-12">
+        <MaterialCommunityIcons color="#A4A4AB" name="map-marker-off-outline" size={32} />
+        <Text className="mt-3 text-sm text-[#A4A4AB]">No hay paradas dentro de este radio.</Text>
+      </View>
+    ) : null;
+
   return (
     <View className="flex-1 bg-[#121212]">
-      <ScrollView contentContainerClassName="px-4 pb-8 pt-5">
-        <Text className="text-2xl font-bold text-[#E1E1E6]">Paradas cercanas</Text>
-        <Text className="mt-1 text-sm text-[#A4A4AB]">
-          Buscá paradas alrededor de tu última ubicación actualizada.
-        </Text>
-
-        <View className="mt-5 flex-row items-center justify-between">
-          <Text className="text-sm font-semibold text-[#E1E1E6]">Radio de búsqueda</Text>
-          <Pressable
-            accessibilityLabel="Actualizar ubicación"
-            className="flex-row items-center rounded-full bg-[#25252B] px-3 py-2 active:opacity-70 disabled:opacity-50"
-            disabled={isLocating}
-            onPress={() => void refreshLocation()}>
-            {isLocating ? (
-              <ActivityIndicator color="#80D4FF" size="small" />
-            ) : (
-              <MaterialCommunityIcons color="#80D4FF" name="crosshairs-gps" size={18} />
-            )}
-            <Text className="ml-1.5 text-xs font-semibold text-[#E1E1E6]">Actualizar</Text>
-          </Pressable>
-        </View>
-        <ScrollView className="mt-3" horizontal showsHorizontalScrollIndicator={false}>
-          <View className="flex-row gap-2">
-            {RADIUS_OPTIONS.map((radius) => (
-              <Pressable
-                className={`rounded-full px-4 py-2 ${
-                  radius === radiusMeters ? 'bg-[#1976A8]' : 'bg-[#25252B]'
-                }`}
-                key={radius}
-                onPress={() => setRadiusMeters(radius)}>
-                <Text className="text-sm font-semibold text-[#E1E1E6]">{radius} m</Text>
-              </Pressable>
-            ))}
-          </View>
-        </ScrollView>
-
-        {locationError ? <Notice text={locationError} /> : null}
-        {!location && !locationError && !isLocating ? (
-          <View className="mt-6 items-center rounded-2xl bg-[#1E1E24] px-5 py-9">
-            <MaterialCommunityIcons color="#80D4FF" name="crosshairs-gps" size={34} />
-            <Text className="mt-4 text-base font-semibold text-[#E1E1E6]">
-              Buscá paradas cerca tuyo
-            </Text>
-            <Text className="mt-2 text-center text-sm text-[#A4A4AB]">
-              Tocá Actualizar para permitir ubicación y buscar dentro del radio elegido.
-            </Text>
-          </View>
-        ) : null}
-        {isLocating ? (
-          <View className="items-center py-12">
-            <ActivityIndicator color="#80D4FF" />
-            <Text className="mt-3 text-sm text-[#A4A4AB]">Obteniendo tu ubicación…</Text>
-          </View>
-        ) : null}
-        {nearbyStopsQuery.isPending ? (
-          <View className="items-center py-12">
-            <ActivityIndicator color="#80D4FF" />
-            <Text className="mt-3 text-sm text-[#A4A4AB]">Buscando paradas cercanas…</Text>
-          </View>
-        ) : null}
-        {nearbyStopsQuery.isError ? (
-          <Pressable onPress={() => void nearbyStopsQuery.refetch()}>
-            <Notice text="No se pudieron cargar las paradas. Tocá para reintentar." />
-          </Pressable>
-        ) : null}
-        {nearbyStopsQuery.data?.map((stop) => (
-          <NearbyStopCard
-            key={stop.identifier}
-            onMap={() => setMapStop(stop)}
-            onPress={() => setSelectedStop(stop)}
-            stop={stop}
-          />
-        ))}
-        {!nearbyStopsQuery.isPending &&
-        !nearbyStopsQuery.isError &&
-        location &&
-        nearbyStopsQuery.data?.length === 0 ? (
-          <View className="items-center py-12">
-            <MaterialCommunityIcons color="#A4A4AB" name="map-marker-off-outline" size={32} />
-            <Text className="mt-3 text-sm text-[#A4A4AB]">
-              No hay paradas dentro de este radio.
-            </Text>
-          </View>
-        ) : null}
-      </ScrollView>
+      <FlashList
+        style={{ paddingHorizontal: 16, paddingBottom: 32, paddingTop: 20 } as any}
+        data={stops}
+        keyExtractor={keyExtractor}
+        ListEmptyComponent={ListEmpty}
+        ListHeaderComponent={ListHeader}
+        renderItem={renderItem}
+      />
       {selectedStop && selectedDetail ? (
         <StopSheet
           detail={selectedDetail}
@@ -194,21 +256,139 @@ export function NearbyStopsScreen() {
   );
 }
 
-function NearbyStopCard({
+// ---------------------------------------------------------------------------
+// ListHeaderComponent — encabezado, selector de radio y estados
+// ---------------------------------------------------------------------------
+
+function ListHeaderComponent({
+  isLocating,
+  location,
+  locationError,
+  nearbyStopsQuery,
+  onRefreshLocation,
+  radiusMeters,
+  onRadiusChange,
+}: {
+  isLocating: boolean;
+  location: LngLat | null;
+  locationError: string | null;
+  nearbyStopsQuery: ReturnType<typeof useQuery>;
+  onRefreshLocation: () => void;
+  radiusMeters: (typeof RADIUS_OPTIONS)[number];
+  onRadiusChange: (radius: (typeof RADIUS_OPTIONS)[number]) => void;
+}) {
+  return (
+    <>
+      <Text className="text-2xl font-bold text-[#E1E1E6]">Paradas cercanas</Text>
+      <Text className="mt-1 text-sm text-[#A4A4AB]">
+        Buscá paradas alrededor de tu última ubicación actualizada.
+      </Text>
+
+      <View className="mt-5 flex-row items-center justify-between">
+        <Text className="text-sm font-semibold text-[#E1E1E6]">Radio de búsqueda</Text>
+        <Pressable
+          accessibilityLabel="Actualizar ubicación"
+          className="flex-row items-center rounded-full bg-[#25252B] px-3 py-2 active:opacity-70 disabled:opacity-50"
+          disabled={isLocating}
+          onPress={onRefreshLocation}>
+          {isLocating ? (
+            <ActivityIndicator color="#80D4FF" size="small" />
+          ) : (
+            <MaterialCommunityIcons color="#80D4FF" name="crosshairs-gps" size={18} />
+          )}
+          <Text className="ml-1.5 text-xs font-semibold text-[#E1E1E6]">Actualizar</Text>
+        </Pressable>
+      </View>
+      {/* Horizontal radius selector — small and fixed; no virtualisation needed */}
+      <View className="mt-3">
+        <FlashList
+          data={RADIUS_OPTIONS as unknown as (typeof RADIUS_OPTIONS)[number][]}
+          horizontal
+          keyExtractor={(item) => String(item)}
+          renderItem={({ item: radius }) => (
+            <Pressable
+              className={`mr-2 rounded-full px-4 py-2 ${radius === radiusMeters ? 'bg-[#1976A8]' : 'bg-[#25252B]'}`}
+              onPress={() => onRadiusChange(radius as (typeof RADIUS_OPTIONS)[number])}>
+              <Text className="text-sm font-semibold text-[#E1E1E6]">{radius} m</Text>
+            </Pressable>
+          )}
+          showsHorizontalScrollIndicator={false}
+        />
+      </View>
+
+      {locationError ? <Notice text={locationError} /> : null}
+      {!location && !locationError && !isLocating ? (
+        <View className="mt-6 items-center rounded-2xl bg-[#1E1E24] px-5 py-9">
+          <MaterialCommunityIcons color="#80D4FF" name="crosshairs-gps" size={34} />
+          <Text className="mt-4 text-base font-semibold text-[#E1E1E6]">
+            Buscá paradas cerca tuyo
+          </Text>
+          <Text className="mt-2 text-center text-sm text-[#A4A4AB]">
+            Tocá Actualizar para permitir ubicación y buscar dentro del radio elegido.
+          </Text>
+        </View>
+      ) : null}
+      {isLocating ? (
+        <View className="items-center py-12">
+          <ActivityIndicator color="#80D4FF" />
+          <Text className="mt-3 text-sm text-[#A4A4AB]">Obteniendo tu ubicación…</Text>
+        </View>
+      ) : null}
+      {nearbyStopsQuery.isPending ? (
+        <View className="items-center py-12">
+          <ActivityIndicator color="#80D4FF" />
+          <Text className="mt-3 text-sm text-[#A4A4AB]">Buscando paradas cercanas…</Text>
+        </View>
+      ) : null}
+      {nearbyStopsQuery.isError ? (
+        <Pressable onPress={() => void nearbyStopsQuery.refetch()}>
+          <Notice text="No se pudieron cargar las paradas. Tocá para reintentar." />
+        </Pressable>
+      ) : null}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// NearbyStopCard — memoised to avoid re-renders when parent state changes
+// ---------------------------------------------------------------------------
+
+const NearbyStopCard = memo(function NearbyStopCard({
+  address,
+  isCoolingDown,
+  isRevealing,
   onMap,
   onPress,
+  onRevealLocation,
   stop,
 }: {
-  onMap: () => void;
-  onPress: () => void;
+  address: string | undefined;
+  isCoolingDown: boolean;
+  isRevealing: boolean;
+  onMap: (stop: NearbyMapStop) => void;
+  onPress: (stop: NearbyMapStop) => void;
+  onRevealLocation: (stop: NearbyMapStop) => Promise<void>;
   stop: NearbyMapStop;
 }) {
+  const handleRevealLocation = (event: GestureResponderEvent) => {
+    event.stopPropagation();
+    void onRevealLocation(stop);
+  };
+
   const lines = [...new Set(stop.directions.map((direction) => direction.nameTransitLine))];
   return (
-    <Pressable className="mt-4 rounded-2xl bg-[#1E1E24] p-4 active:opacity-70" onPress={onPress}>
-      <View className="flex-row items-start justify-between">
+    <Pressable
+      className="mt-4 rounded-2xl bg-[#1E1E24] p-4 active:opacity-70"
+      onPress={() => onPress(stop)}>
+      <View className="flex-row items-center justify-between">
         <View className="mr-3 flex-1">
-          <Text className="text-base font-bold text-[#E1E1E6]">Parada {stop.identifier}</Text>
+          {address ? (
+            <View className="self-start rounded-xl bg-[#25252B] p-2.5">
+              <Text className="text-sm font-semibold text-[#E1E1E6]">{address}</Text>
+            </View>
+          ) : (
+            <Text className="text-base font-bold text-[#E1E1E6]">Parada {stop.identifier}</Text>
+          )}
         </View>
         <Text className="text-sm font-semibold text-[#80D4FF]">{stop.distanceMeters} m</Text>
       </View>
@@ -219,18 +399,37 @@ function NearbyStopCard({
           </View>
         ))}
       </View>
-      <Pressable
-        accessibilityLabel={`Ver parada ${stop.identifier} en el mapa`}
-        className="mt-4 self-start rounded-lg bg-[#25252B] px-3 py-2"
-        onPress={(event) => {
-          event.stopPropagation();
-          onMap();
-        }}>
-        <Text className="text-xs font-semibold text-[#80D4FF]">Ver en mapa</Text>
-      </Pressable>
+      <View className="mt-4 flex-row items-center gap-2">
+        <Pressable
+          accessibilityLabel={`Ver parada ${stop.identifier} en el mapa`}
+          className="rounded-lg bg-[#25252B] px-3 py-2"
+          onPress={(event) => {
+            event.stopPropagation();
+            onMap(stop);
+          }}>
+          <Text className="text-xs font-semibold text-[#80D4FF]">Ver en mapa</Text>
+        </Pressable>
+        {!address ? (
+          <Pressable
+            accessibilityLabel="Revelar ubicación de la parada"
+            className="rounded-lg bg-[#80d4ff] px-3 py-2 disabled:opacity-50"
+            disabled={isRevealing || isCoolingDown}
+            onPress={handleRevealLocation}>
+            {isRevealing ? (
+              <ActivityIndicator color="#121212" size="small" />
+            ) : (
+              <Text className="text-xs font-semibold text-[#121212]">Revelar Ubicación</Text>
+            )}
+          </Pressable>
+        ) : null}
+      </View>
     </Pressable>
   );
-}
+});
+
+// ---------------------------------------------------------------------------
+// NearbyStopMapModal
+// ---------------------------------------------------------------------------
 
 function NearbyStopMapModal({
   location,
@@ -345,4 +544,8 @@ function NearbyStopMapModal({
 
 function Notice({ text }: { text: string }) {
   return <Text className="mt-5 rounded-xl bg-[#332500] p-4 text-sm text-[#E5B842]">{text}</Text>;
+}
+
+function normalizeLocationCoordinate(coordinate: number): number {
+  return Math.round(coordinate * LOCATION_CACHE_PRECISION) / LOCATION_CACHE_PRECISION;
 }

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useIsFocused } from 'expo-router';
 import {
   BackHandler,
+  ActivityIndicator,
   Modal,
   Platform,
   Pressable,
@@ -21,6 +22,7 @@ import Animated, {
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { FlashList, type ListRenderItem } from '@shopify/flash-list';
 import { useMutation, useQuery, type UseQueryResult } from '@tanstack/react-query';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 
 import { getErrorMessage } from '@/src/lib/error-message';
 import { queryClient, queryKeys } from '@/src/lib/query-client';
@@ -210,7 +212,7 @@ function LinesStep({ onSelect }: { onSelect: (line: TransitLineDTO) => void }) {
   const [search, setSearch] = useState('');
   const query = useQuery({
     queryKey: queryKeys.catalog.lines(),
-    queryFn: getTransitLines,
+    queryFn: ({ signal }) => getTransitLines(signal),
     ...CATALOG_OPTIONS,
   });
   const data = useMemo(() => {
@@ -260,7 +262,7 @@ function StreetsStep({
 }: StepProps<TransitStreetDTO> & { line: TransitLineDTO }) {
   const query = useQuery({
     queryKey: queryKeys.catalog.streets(line.codigo),
-    queryFn: () => getTransitStreets(line.codigo),
+    queryFn: ({ signal }) => getTransitStreets(line.codigo, signal),
     ...CATALOG_OPTIONS,
   });
   return (
@@ -290,7 +292,7 @@ function IntersectionsStep({
 }: StepProps<TransitIntersectionDTO> & { line: TransitLineDTO; street: TransitStreetDTO }) {
   const query = useQuery({
     queryKey: queryKeys.catalog.intersections(line.codigo, street.codigo),
-    queryFn: () => getTransitIntersections(line.codigo, street.codigo),
+    queryFn: ({ signal }) => getTransitIntersections(line.codigo, street.codigo, signal),
     ...CATALOG_OPTIONS,
   });
   return (
@@ -325,7 +327,8 @@ function StopsStep({
 }) {
   const query = useQuery({
     queryKey: queryKeys.catalog.stopsWithFlags(line.codigo, street.codigo, intersection.codigo),
-    queryFn: () => getTransitStopsWithFlag(line.codigo, street.codigo, intersection.codigo),
+    queryFn: ({ signal }) =>
+      getTransitStopsWithFlag(line.codigo, street.codigo, intersection.codigo, signal),
     ...CATALOG_OPTIONS,
   });
 
@@ -450,7 +453,8 @@ function ArrivalsStep({
       stop.identificador,
       stop.abreviaturaBandera
     ),
-    queryFn: () => getArrivals(line.codigo, stop.identificador, stop.abreviaturaBandera),
+    queryFn: ({ signal }) =>
+      getArrivals(line.codigo, stop.identificador, stop.abreviaturaBandera, signal),
     staleTime: 15_000,
     gcTime: 5 * 60_000,
     retry: 0,
@@ -561,16 +565,18 @@ function ArrivalsStep({
           visible={isSaving}
         />
       ) : null}
-      <ArrivalMapModal
-        arrivals={query.data}
-        direction={stop.abreviaturaBandera}
-        isRefreshing={query.isFetching}
-        lineCode={line.codigo}
-        onClose={() => setIsMapVisible(false)}
-        onRefresh={() => void query.refetch()}
-        stop={stop}
-        visible={isMapVisible}
-      />
+      {isMapVisible ? (
+        <ArrivalMapModal
+          arrivals={query.data}
+          direction={stop.abreviaturaBandera}
+          isRefreshing={query.isFetching}
+          lineCode={line.codigo}
+          onClose={() => setIsMapVisible(false)}
+          onRefresh={() => void query.refetch()}
+          stop={stop}
+          visible
+        />
+      ) : null}
     </StepLayout>
   );
 }
@@ -582,7 +588,8 @@ function ArrivalsContent({
   listFooterComponent?: React.ReactElement;
   query: UseQueryResult<ArrivalResponseDTO, Error>;
 }) {
-  const now = useArrivalClock();
+  const isFocused = useIsFocused();
+  const now = useArrivalClock(isFocused);
   if (query.isPending) return <LoadingState label="Consultando arribos" />;
   if (query.isError) return <ErrorState error={query.error} onRetry={() => void query.refetch()} />;
   if (query.data.arrivals.length === 0)
@@ -595,9 +602,9 @@ function ArrivalsContent({
   return (
     <FlashList
       data={query.data.arrivals}
-      keyExtractor={(arrival) =>
+      keyExtractor={(arrival, index) =>
         arrival.vehicleUnit ??
-        `${arrival.lineCode ?? 'linea'}:${arrival.estimatedArrivalTime ?? 'sin-hora'}`
+        `${arrival.lineCode ?? 'linea'}:${arrival.estimatedArrivalTime ?? 'sin-hora'}:${index}`
       }
       ListFooterComponent={listFooterComponent}
       renderItem={({ item }) => <ArrivalCard arrival={item} now={now} />}
@@ -622,13 +629,27 @@ function QuickSwitchPanel({
 
   const query = useQuery({
     queryKey: queryKeys.map.stop(stop.identificador),
-    queryFn: () => getMapStop(stop.identificador),
+    queryFn: ({ signal }) => getMapStop(stop.identificador, signal),
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
     retry: 1,
   });
 
-  if (!query.isSuccess || !query.data) return null;
+  if (!query.isSuccess || !query.data) {
+    return query.isPending ? (
+      <View className="mb-3 mt-1 flex-row items-center gap-2 self-start rounded-xl bg-[#25252B] px-4 py-3">
+        <ActivityIndicator color="#80D4FF" size="small" />
+        <Text className="text-sm text-[#A4A4AB]">Buscando opciones…</Text>
+      </View>
+    ) : query.isError ? (
+      <Pressable
+        accessibilityLabel="Reintentar opciones de combinación"
+        className="mb-3 mt-1 self-start rounded-xl bg-[#25252B] px-4 py-3 active:opacity-70"
+        onPress={() => void query.refetch()}>
+        <Text className="text-sm font-semibold text-[#80D4FF]">Reintentar opciones</Text>
+      </Pressable>
+    ) : null;
+  }
 
   const directions = query.data.directions;
 
@@ -677,6 +698,7 @@ function QuickSwitchPanel({
 
   function handleDirectionPress(dir: MapStopDirection) {
     const [newLine, newStop] = buildLineAndStop(dir);
+    setPendingLineName(null);
     onSwitch(newLine, newStop);
   }
 
@@ -845,7 +867,10 @@ function SavePresetModal({
   }
   return (
     <Modal animationType="slide" onRequestClose={onClose} transparent visible={visible}>
-      <View className="flex-1 justify-end bg-black/60">
+      <KeyboardAvoidingView
+        automaticOffset
+        behavior="padding"
+        className="flex-1 justify-end bg-black/60">
         <View className="rounded-t-3xl bg-[#1E1E24] p-6">
           <Text className="text-xl font-semibold text-[#E1E1E6]">Guardar acceso rápido</Text>
           <Text className="mt-2 text-sm text-[#A4A4AB]">
@@ -880,7 +905,7 @@ function SavePresetModal({
             </Pressable>
           </View>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }

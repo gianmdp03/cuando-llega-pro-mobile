@@ -6,6 +6,9 @@ import type { AuthResponse, AuthenticatedUser } from '@/src/types/api';
 const AUTH_TOKEN_KEY = 'auth_token';
 const AUTH_EXPIRES_AT_KEY = 'auth_expires_at';
 const AUTH_USER_KEY = 'authenticated_user';
+let memoryToken: string | null | undefined;
+let pendingTokenRead: Promise<string | null> | undefined;
+let tokenGeneration = 0;
 
 /** Shared MMKV storage for non-secret session metadata and future UI preferences. */
 export const storage = createMMKV({ id: 'cuando-llega-pro' });
@@ -30,11 +33,33 @@ async function requireSecureStorage(): Promise<void> {
 }
 
 export async function getAuthToken(): Promise<string | null> {
-  await requireSecureStorage();
-  return SecureStore.getItemAsync(AUTH_TOKEN_KEY);
+  if (memoryToken !== undefined) {
+    return memoryToken;
+  }
+
+  if (!pendingTokenRead) {
+    const generation = tokenGeneration;
+    pendingTokenRead = (async () => {
+      await requireSecureStorage();
+      const token = await SecureStore.getItemAsync(AUTH_TOKEN_KEY);
+
+      // A login or logout may complete while SecureStore is being read. Never
+      // let that older read overwrite the newer in-memory session state.
+      if (generation === tokenGeneration) {
+        memoryToken = token;
+      }
+
+      return memoryToken ?? null;
+    })().finally(() => {
+      pendingTokenRead = undefined;
+    });
+  }
+
+  return pendingTokenRead;
 }
 
 export async function setAuthSession(response: AuthResponse): Promise<AuthSession> {
+  tokenGeneration += 1;
   await requireSecureStorage();
 
   const expiresAt =
@@ -44,6 +69,7 @@ export async function setAuthSession(response: AuthResponse): Promise<AuthSessio
   const user = response.user;
 
   await SecureStore.setItemAsync(AUTH_TOKEN_KEY, response.token);
+  memoryToken = response.token;
   storage.set(AUTH_EXPIRES_AT_KEY, expiresAt);
   storage.set(AUTH_USER_KEY, JSON.stringify(user));
 
@@ -89,6 +115,8 @@ export async function getAuthSession(): Promise<AuthSession | null> {
 }
 
 export async function clearAuthSession(): Promise<void> {
+  tokenGeneration += 1;
+  memoryToken = null;
   await requireSecureStorage();
   await SecureStore.deleteItemAsync(AUTH_TOKEN_KEY);
   storage.remove(AUTH_EXPIRES_AT_KEY);

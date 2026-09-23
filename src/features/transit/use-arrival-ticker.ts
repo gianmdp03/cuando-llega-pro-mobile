@@ -5,28 +5,50 @@ import type { BusArrival } from '@/src/types/api';
 const listeners = new Set<() => void>();
 let now = Date.now();
 let intervalId: ReturnType<typeof setInterval> | undefined;
+let initialTimeoutId: ReturnType<typeof setTimeout> | undefined;
+
+function notifyListeners(): void {
+  now = Date.now();
+  listeners.forEach((notify) => notify());
+}
+
+function startMinuteClock(): void {
+  now = Date.now();
+  const millisecondsUntilNextMinute = 60_000 - (now % 60_000);
+  initialTimeoutId = setTimeout(() => {
+    notifyListeners();
+    intervalId = setInterval(notifyListeners, 60_000);
+  }, millisecondsUntilNextMinute);
+}
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
-  if (!intervalId) {
-    intervalId = setInterval(() => {
-      now = Date.now();
-      listeners.forEach((notify) => notify());
-    }, 1_000);
+  if (!intervalId && !initialTimeoutId) {
+    startMinuteClock();
   }
 
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0 && intervalId) {
-      clearInterval(intervalId);
-      intervalId = undefined;
+    if (listeners.size === 0) {
+      if (initialTimeoutId) {
+        clearTimeout(initialTimeoutId);
+        initialTimeoutId = undefined;
+      }
+      if (intervalId) {
+        clearInterval(intervalId);
+        intervalId = undefined;
+      }
     }
   };
 }
 
-export function useArrivalClock(): number {
+function subscribeWithoutClock(): () => void {
+  return () => {};
+}
+
+export function useArrivalClock(enabled = true): number {
   return useSyncExternalStore(
-    subscribe,
+    enabled ? subscribe : subscribeWithoutClock,
     () => now,
     () => now
   );

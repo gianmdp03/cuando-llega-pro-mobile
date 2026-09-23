@@ -1,4 +1,4 @@
-import { Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 
 import { Picker } from '@react-native-picker/picker';
 import type { UseQueryResult } from '@tanstack/react-query';
@@ -12,6 +12,7 @@ export function MapControls({
   linesQuery,
   onDirectionChange,
   onLineChange,
+  onRetry,
   showError,
 }: {
   direction: string | null;
@@ -23,6 +24,7 @@ export function MapControls({
   linesQuery: UseQueryResult<MapLine[], Error>;
   onDirectionChange: (direction: string | null) => void;
   onLineChange: (line: MapLine | null) => void;
+  onRetry: () => void;
   showError: boolean;
 }) {
   return (
@@ -68,9 +70,14 @@ export function MapControls({
         </>
       ) : null}
       {showError ? (
-        <Text className="mt-2 text-xs text-[#E5B842]">
-          No se pudo cargar el catálogo. Reintentá cambiando la selección.
-        </Text>
+        <View className="mt-2 flex-row items-center justify-between gap-3">
+          <Text className="flex-1 text-xs text-[#E5B842]">No se pudo cargar el catálogo.</Text>
+          <Pressable
+            className="rounded-lg bg-[#25252B] px-3 py-2 active:opacity-70"
+            onPress={onRetry}>
+            <Text className="text-xs font-semibold text-[#80D4FF]">Reintentar</Text>
+          </Pressable>
+        </View>
       ) : null}
     </View>
   );

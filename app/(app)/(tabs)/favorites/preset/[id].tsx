@@ -16,7 +16,7 @@ export default function PresetScreen() {
   const presetId = Number(id);
   const presetQuery = useQuery({
     queryKey: queryKeys.presets.detail(presetId),
-    queryFn: () => getPreset(presetId),
+    queryFn: ({ signal }) => getPreset(presetId, signal),
     enabled: Number.isInteger(presetId) && presetId > 0,
     ...PRESET_OPTIONS,
   });

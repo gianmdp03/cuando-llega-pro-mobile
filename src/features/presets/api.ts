@@ -8,12 +8,14 @@ import type {
 
 const MGP_PACED_TIMEOUT_MS = 90_000;
 
-export function getPresets(): Promise<PresetListDTO[]> {
-  return apiClient.get<PresetListDTO[]>('/api/v1/presets');
+export function getPresets(signal?: AbortSignal): Promise<PresetListDTO[]> {
+  return apiClient.get<PresetListDTO[]>('/api/v1/presets', { signal });
 }
 
-export function getPreset(id: number): Promise<PresetDetailDTO> {
-  return apiClient.get<PresetDetailDTO>(`/api/v1/presets/${encodeURIComponent(String(id))}`);
+export function getPreset(id: number, signal?: AbortSignal): Promise<PresetDetailDTO> {
+  return apiClient.get<PresetDetailDTO>(`/api/v1/presets/${encodeURIComponent(String(id))}`, {
+    signal,
+  });
 }
 
 export function createPreset(request: PresetRequestDTO): Promise<PresetDetailDTO> {

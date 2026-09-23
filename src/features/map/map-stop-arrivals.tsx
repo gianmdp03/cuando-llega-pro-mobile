@@ -30,7 +30,8 @@ export function MapStopArrivals({
       stopIdentifier,
       direction.direction
     ),
-    queryFn: () => getArrivals(direction.nameTransitLine, stopIdentifier, direction.direction),
+    queryFn: ({ signal }) =>
+      getArrivals(direction.nameTransitLine, stopIdentifier, direction.direction, signal),
     staleTime: 15_000,
     gcTime: 5 * 60_000,
     retry: 0,
@@ -91,10 +92,12 @@ export function MapStopArrivals({
         </View>
       ) : null}
       <View className="mt-4">
-        {arrivals.map((arrival) => (
+        {arrivals.map((arrival, index) => (
           <MapArrivalCard
             arrival={arrival}
-            key={arrival.vehicleUnit ?? `${arrival.lineCode}:${arrival.estimatedArrivalTime}`}
+            key={
+              arrival.vehicleUnit ?? `${arrival.lineCode}:${arrival.estimatedArrivalTime}:${index}`
+            }
             now={now}
           />
         ))}

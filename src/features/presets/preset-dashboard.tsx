@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, Text, View } from 'react-native';
 
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -15,14 +16,36 @@ const PRESET_OPTIONS = { staleTime: 15_000, gcTime: 5 * 60_000, retry: 1 } as co
 /** The presets tab is deliberately only a chooser; arrivals live in the PRIME details screen. */
 export function PresetDashboard() {
   const router = useRouter();
+  const [deletingPresetIds, setDeletingPresetIds] = useState<ReadonlySet<number>>(new Set());
+  const [deleteErrors, setDeleteErrors] = useState<Record<number, string>>({});
   const presetsQuery = useQuery({
     queryKey: queryKeys.presets.all(),
-    queryFn: getPresets,
+    queryFn: ({ signal }) => getPresets(signal),
     ...PRESET_OPTIONS,
   });
   const deleteMutation = useMutation({
     mutationFn: deletePreset,
-    onSuccess: (_result, id) => void invalidatePresetQueries(id),
+    onMutate: (id) => {
+      setDeletingPresetIds((previous) => new Set(previous).add(id));
+      setDeleteErrors((previous) => {
+        const { [id]: _removed, ...next } = previous;
+        return next;
+      });
+    },
+    onSuccess: (_result, id) => invalidatePresetQueries(id),
+    onError: (error, id) => {
+      setDeleteErrors((previous) => ({
+        ...previous,
+        [id]: errorMessage(error),
+      }));
+    },
+    onSettled: (_result, _error, id) => {
+      setDeletingPresetIds((previous) => {
+        const next = new Set(previous);
+        next.delete(id);
+        return next;
+      });
+    },
   });
 
   if (presetsQuery.isPending) return <Loading />;
@@ -45,6 +68,8 @@ export function PresetDashboard() {
         ListEmptyComponent={<EmptyState />}
         renderItem={({ item }) => (
           <PresetRow
+            deleteError={deleteErrors[item.id]}
+            isDeleting={deletingPresetIds.has(item.id)}
             onDelete={() =>
               Alert.alert('Eliminar preset', 'Esta acción no se puede deshacer.', [
                 { style: 'cancel', text: 'Cancelar' },
@@ -67,10 +92,14 @@ export function PresetDashboard() {
 }
 
 function PresetRow({
+  deleteError,
+  isDeleting,
   onDelete,
   onPress,
   preset,
 }: {
+  deleteError?: string;
+  isDeleting: boolean;
   onDelete: () => void;
   onPress: () => void;
   preset: PresetListDTO;
@@ -95,10 +124,19 @@ function PresetRow({
           </View>
           <MaterialCommunityIcons color="#A4A4AB" name="chevron-right" size={22} />
         </Pressable>
-        <Pressable accessibilityLabel="Eliminar preset" className="p-2" onPress={onDelete}>
-          <MaterialCommunityIcons color="#E5B842" name="trash-can-outline" size={20} />
+        <Pressable
+          accessibilityLabel="Eliminar preset"
+          className="p-2 disabled:opacity-40"
+          disabled={isDeleting}
+          onPress={onDelete}>
+          {isDeleting ? (
+            <ActivityIndicator color="#E5B842" size="small" />
+          ) : (
+            <MaterialCommunityIcons color="#E5B842" name="trash-can-outline" size={20} />
+          )}
         </Pressable>
       </View>
+      {deleteError ? <Text className="mt-2 text-sm text-[#E5B842]">{deleteError}</Text> : null}
     </View>
   );
 }

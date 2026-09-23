@@ -12,38 +12,19 @@ import {
   Layer,
   type LngLat,
   Map,
-  type StyleSpecification,
   ViewAnnotation,
   type ViewAnnotationRef,
 } from '@maplibre/maplibre-react-native';
 
-import type { ArrivalResponseDTO, MapRoute, TransitStopWithFlagDTO } from '@/src/types/api';
+import type { ArrivalResponseDTO, TransitStopWithFlagDTO } from '@/src/types/api';
 import { getMapRoutes } from '@/src/features/map/api';
-import { distanceMeters as geoDistanceMeters } from '@/src/features/map/geo';
+import { createRouteArrows, routeMatchesDirection } from '@/src/features/map/geo';
+import { OSM_STYLE } from '@/src/features/map/map-style';
 import { queryKeys } from '@/src/lib/query-client';
 import {
   getVisualRemainingMinutes,
   useArrivalClock,
 } from '@/src/features/transit/use-arrival-ticker';
-
-const OSM_STYLE = {
-  version: 8,
-  name: 'OpenStreetMap',
-  sources: {
-    openstreetmap: {
-      type: 'raster',
-      tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-      tileSize: 256,
-      minzoom: 1,
-      maxzoom: 19,
-      attribution: '© OpenStreetMap contributors',
-    },
-  },
-  layers: [
-    { id: 'background', type: 'background', paint: { 'background-color': '#121212' } },
-    { id: 'openstreetmap', type: 'raster', source: 'openstreetmap' },
-  ],
-} satisfies StyleSpecification;
 
 export const MAP_IMAGES = {
   'arrival-bus-icon':
@@ -84,7 +65,7 @@ export function ArrivalMapModal({
   const now = useArrivalClock();
   const routesQuery = useQuery({
     queryKey: queryKeys.map.routes(lineCode),
-    queryFn: () => getMapRoutes(lineCode),
+    queryFn: ({ signal }) => getMapRoutes(lineCode, signal),
     enabled: visible && Boolean(lineCode),
     ...ROUTE_OPTIONS,
   });
@@ -183,7 +164,7 @@ export function ArrivalMapModal({
       features: (routesQuery.data ?? [])
         .filter((route) => routeMatchesDirection(route, direction))
         .flatMap((route) =>
-          createRouteArrows(route.coordinates).map((arrow) => ({
+          createRouteArrows(route.coordinates, ROUTE_ARROW_SPACING_METERS).map((arrow) => ({
             type: 'Feature' as const,
             properties: { bearing: arrow.bearing - 90, id: route.id },
             geometry: { type: 'Point' as const, coordinates: arrow.lngLat },
@@ -434,74 +415,5 @@ function toInitialViewState(viewport: MapViewport): InitialViewState {
 
 const MAP_PADDING = { bottom: 42, left: 42, right: 42, top: 42 };
 
-function routeMatchesDirection(route: MapRoute, direction: string): boolean {
-  return (
-    !direction || (route.description ?? '').split(';').some((field) => field.trim() === direction)
-  );
-}
-
-function createRouteArrows(coordinates: [number, number][]): RouteArrow[] {
-  const arrows: RouteArrow[] = [];
-  let distanceSinceLastArrow = 0;
-
-  for (let index = 0; index < coordinates.length - 1; index += 1) {
-    const start = coordinates[index];
-    const end = coordinates[index + 1];
-    const segmentMeters = distanceMeters(start, end);
-    if (segmentMeters === 0) continue;
-
-    const bearing = bearingDegrees(start, end);
-    let traversedMeters = 0;
-    while (
-      distanceSinceLastArrow + (segmentMeters - traversedMeters) >=
-      ROUTE_ARROW_SPACING_METERS
-    ) {
-      const metersToArrow = ROUTE_ARROW_SPACING_METERS - distanceSinceLastArrow;
-      traversedMeters += metersToArrow;
-      const fraction = traversedMeters / segmentMeters;
-      arrows.push({
-        bearing,
-        lngLat: [
-          start[0] + (end[0] - start[0]) * fraction,
-          start[1] + (end[1] - start[1]) * fraction,
-        ],
-      });
-      distanceSinceLastArrow = 0;
-    }
-    distanceSinceLastArrow += segmentMeters - traversedMeters;
-  }
-
-  return arrows;
-}
-
-type RouteArrow = { lngLat: LngLat; bearing: number };
-
-function distanceMeters(
-  [startLongitude, startLatitude]: LngLat,
-  [endLongitude, endLatitude]: LngLat
-): number {
-  return geoDistanceMeters([startLongitude, startLatitude], [endLongitude, endLatitude]);
-}
-
-function bearingDegrees(
-  [startLongitude, startLatitude]: LngLat,
-  [endLongitude, endLatitude]: LngLat
-): number {
-  const longitudeDelta = radians(endLongitude - startLongitude);
-  const startLatitudeRadians = radians(startLatitude);
-  const endLatitudeRadians = radians(endLatitude);
-  const radiansBearing = Math.atan2(
-    Math.sin(longitudeDelta) * Math.cos(endLatitudeRadians),
-    Math.cos(startLatitudeRadians) * Math.sin(endLatitudeRadians) -
-      Math.sin(startLatitudeRadians) * Math.cos(endLatitudeRadians) * Math.cos(longitudeDelta)
-  );
-  return (degrees(radiansBearing) + 360) % 360;
-}
-
-function radians(degreesValue: number): number {
-  return (degreesValue * Math.PI) / 180;
-}
-
-function degrees(radiansValue: number): number {
-  return (radiansValue * 180) / Math.PI;
-}
+// routeMatchesDirection, createRouteArrows, and their geodetic helpers are
+// imported from @/src/features/map/geo to eliminate duplication.

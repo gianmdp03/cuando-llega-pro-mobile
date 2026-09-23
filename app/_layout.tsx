@@ -11,6 +11,7 @@ import { ThemeProvider as NavigationThemeProvider } from 'expo-router/react-navi
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { setUnauthorizedHandler } from '@/src/lib/api-client';
@@ -38,24 +39,26 @@ export default function RootLayout() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <QueryClientProvider client={queryClient}>
-        <ReactQueryAppState>
-          <SafeAreaProvider>
-            <AuthProvider>
-              <NavigationThemeProvider value={NAV_THEME.dark}>
-                <StatusBar style="light" />
-                <RouteProtection>
-                  <Stack screenOptions={{ headerShown: false }}>
-                    <Stack.Screen name="index" />
-                    <Stack.Screen name="(auth)" />
-                    <Stack.Screen name="(app)" />
-                  </Stack>
-                </RouteProtection>
-              </NavigationThemeProvider>
-            </AuthProvider>
-          </SafeAreaProvider>
-        </ReactQueryAppState>
-      </QueryClientProvider>
+      <KeyboardProvider>
+        <QueryClientProvider client={queryClient}>
+          <ReactQueryAppState>
+            <SafeAreaProvider>
+              <AuthProvider>
+                <NavigationThemeProvider value={NAV_THEME.dark}>
+                  <StatusBar style="light" />
+                  <RouteProtection>
+                    <Stack screenOptions={{ headerShown: false }}>
+                      <Stack.Screen name="index" />
+                      <Stack.Screen name="(auth)" />
+                      <Stack.Screen name="(app)" />
+                    </Stack>
+                  </RouteProtection>
+                </NavigationThemeProvider>
+              </AuthProvider>
+            </SafeAreaProvider>
+          </ReactQueryAppState>
+        </QueryClientProvider>
+      </KeyboardProvider>
     </GestureHandlerRootView>
   );
 }

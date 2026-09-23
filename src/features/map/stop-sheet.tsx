@@ -6,12 +6,16 @@ import { MapStopArrivals } from '@/src/features/map/map-stop-arrivals';
 
 export function StopSheet({
   detail,
+  isError,
   isLoading,
   onClose,
+  onRetry,
 }: {
   detail: MapStopDetail | undefined;
+  isError?: boolean;
   isLoading: boolean;
   onClose: () => void;
+  onRetry?: () => void;
 }) {
   const [selectedDirection, setSelectedDirection] = useState<MapStopDirection | null>(null);
   return (
@@ -38,7 +42,18 @@ export function StopSheet({
             ) : detail ? (
               <StopLinesList detail={detail} onSelect={setSelectedDirection} />
             ) : (
-              <Text className="mt-4 text-sm text-[#E5B842]">No se pudo cargar la parada.</Text>
+              <View className="mt-4 items-start">
+                <Text className="text-sm text-[#E5B842]">
+                  {isError ? 'No se pudo cargar la parada.' : 'No hay información de esta parada.'}
+                </Text>
+                {isError && onRetry ? (
+                  <Pressable
+                    className="mt-3 rounded-xl bg-[#25252B] px-4 py-3 active:opacity-70"
+                    onPress={onRetry}>
+                    <Text className="font-semibold text-[#80D4FF]">Reintentar</Text>
+                  </Pressable>
+                ) : null}
+              </View>
             )}
           </ScrollView>
         </View>

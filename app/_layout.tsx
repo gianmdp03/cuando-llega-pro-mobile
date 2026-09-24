@@ -18,6 +18,7 @@ import { setUnauthorizedHandler } from '@/src/lib/api-client';
 import { queryClient } from '@/src/lib/query-client';
 import { AuthProvider, useAuth } from '@/src/providers/auth-provider';
 import { ReactQueryAppState } from '@/src/providers/react-query-app-state';
+import { MgpProvider } from '@/src/services/mgp';
 import { NAV_THEME } from '@/theme';
 
 void SplashScreen.preventAutoHideAsync();
@@ -44,16 +45,18 @@ export default function RootLayout() {
           <ReactQueryAppState>
             <SafeAreaProvider>
               <AuthProvider>
-                <NavigationThemeProvider value={NAV_THEME.dark}>
-                  <StatusBar style="light" />
-                  <RouteProtection>
-                    <Stack screenOptions={{ headerShown: false }}>
-                      <Stack.Screen name="index" />
-                      <Stack.Screen name="(auth)" />
-                      <Stack.Screen name="(app)" />
-                    </Stack>
-                  </RouteProtection>
-                </NavigationThemeProvider>
+                <MgpProvider>
+                  <NavigationThemeProvider value={NAV_THEME.dark}>
+                    <StatusBar style="light" />
+                    <RouteProtection>
+                      <Stack screenOptions={{ headerShown: false }}>
+                        <Stack.Screen name="index" />
+                        <Stack.Screen name="(auth)" />
+                        <Stack.Screen name="(app)" />
+                      </Stack>
+                    </RouteProtection>
+                  </NavigationThemeProvider>
+                </MgpProvider>
               </AuthProvider>
             </SafeAreaProvider>
           </ReactQueryAppState>

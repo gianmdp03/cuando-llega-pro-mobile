@@ -7,8 +7,10 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 
 import { deletePreset, getPresets } from '@/src/features/presets/api';
+import { TelemetryBadge } from '@/src/features/transit/arrival-ui';
 import { ProblemDetailError } from '@/src/lib/api-client';
 import { queryClient, queryKeys } from '@/src/lib/query-client';
+import { useArrivalsQuery } from '@/src/services/mgp';
 import type { PresetListDTO } from '@/src/types/api';
 
 const PRESET_OPTIONS = { staleTime: 15_000, gcTime: 5 * 60_000, retry: 1 } as const;
@@ -107,6 +109,14 @@ function PresetRow({
   const name = preset.alias?.trim() || `Línea ${preset.codigoLinea}`;
   const direction = preset.bandera || 'Todos los sentidos';
 
+  const arrivalsQuery = useArrivalsQuery(
+    preset.codigoLinea,
+    preset.identificadorParada,
+    preset.bandera
+  );
+
+  const nextArrival = arrivalsQuery.data?.arrivals?.[0];
+
   return (
     <View className="mb-2 rounded-2xl bg-[#1E1E24] p-4">
       <View className="flex-row items-center gap-3">
@@ -122,6 +132,22 @@ function PresetRow({
               Línea {preset.codigoLinea} · {direction}
             </Text>
           </View>
+          {arrivalsQuery.isPending ? (
+            <ActivityIndicator color="#80D4FF" size="small" />
+          ) : nextArrival ? (
+            <View className="items-end gap-1">
+              <Text className="text-base font-bold text-[#80D4FF]">
+                {nextArrival.remainingMinutes === 0
+                  ? 'Arribando'
+                  : nextArrival.remainingMinutes != null
+                    ? `${nextArrival.remainingMinutes} min`
+                    : 'Próximo'}
+              </Text>
+              <TelemetryBadge compact status={nextArrival.status} />
+            </View>
+          ) : arrivalsQuery.isSuccess ? (
+            <Text className="text-xs text-[#8E8E93]">Sin arribos</Text>
+          ) : null}
           <MaterialCommunityIcons color="#A4A4AB" name="chevron-right" size={22} />
         </Pressable>
         <Pressable

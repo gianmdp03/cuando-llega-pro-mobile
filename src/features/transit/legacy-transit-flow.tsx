@@ -38,13 +38,7 @@ import {
   LoadingState,
   StepLayout,
 } from '@/src/features/transit/transit-catalog-ui';
-import {
-  getArrivals,
-  getTransitIntersections,
-  getTransitLines,
-  getTransitStopsWithFlag,
-  getTransitStreets,
-} from '@/src/features/transit/api';
+import { useArrivalsQuery, useTransitCatalog } from '@/src/services/mgp';
 import {
   formatVisualArrivalMinutes,
   getArrivalClockTime,
@@ -209,10 +203,11 @@ function presetStop(preset: PresetDetailDTO): TransitStopWithFlagDTO {
 }
 
 function LinesStep({ onSelect }: { onSelect: (line: TransitLineDTO) => void }) {
+  const catalog = useTransitCatalog();
   const [search, setSearch] = useState('');
   const query = useQuery({
     queryKey: queryKeys.catalog.lines(),
-    queryFn: ({ signal }) => getTransitLines(signal),
+    queryFn: ({ signal }) => catalog.lines(signal),
     ...CATALOG_OPTIONS,
   });
   const data = useMemo(() => {
@@ -260,9 +255,10 @@ function StreetsStep({
   onBack,
   onSelect,
 }: StepProps<TransitStreetDTO> & { line: TransitLineDTO }) {
+  const catalog = useTransitCatalog();
   const query = useQuery({
     queryKey: queryKeys.catalog.streets(line.codigo),
-    queryFn: ({ signal }) => getTransitStreets(line.codigo, signal),
+    queryFn: ({ signal }) => catalog.streets(line.codigo, signal),
     ...CATALOG_OPTIONS,
   });
   return (
@@ -290,9 +286,10 @@ function IntersectionsStep({
   onSelect,
   street,
 }: StepProps<TransitIntersectionDTO> & { line: TransitLineDTO; street: TransitStreetDTO }) {
+  const catalog = useTransitCatalog();
   const query = useQuery({
     queryKey: queryKeys.catalog.intersections(line.codigo, street.codigo),
-    queryFn: ({ signal }) => getTransitIntersections(line.codigo, street.codigo, signal),
+    queryFn: ({ signal }) => catalog.intersections(line.codigo, street.codigo, signal),
     ...CATALOG_OPTIONS,
   });
   return (
@@ -325,10 +322,10 @@ function StopsStep({
   line: TransitLineDTO;
   street: TransitStreetDTO;
 }) {
+  const catalog = useTransitCatalog();
   const query = useQuery({
     queryKey: queryKeys.catalog.stopsWithFlags(line.codigo, street.codigo, intersection.codigo),
-    queryFn: ({ signal }) =>
-      getTransitStopsWithFlag(line.codigo, street.codigo, intersection.codigo, signal),
+    queryFn: ({ signal }) => catalog.stopsWithFlag(line.codigo, street.codigo, intersection.codigo, signal),
     ...CATALOG_OPTIONS,
   });
 
@@ -447,18 +444,11 @@ function ArrivalsStep({
 }) {
   const [isSaving, setIsSaving] = useState(false);
   const [isMapVisible, setIsMapVisible] = useState(false);
-  const query = useQuery({
-    queryKey: queryKeys.telemetry.arrivals(
-      line.codigo,
-      stop.identificador,
-      stop.abreviaturaBandera
-    ),
-    queryFn: ({ signal }) =>
-      getArrivals(line.codigo, stop.identificador, stop.abreviaturaBandera, signal),
-    staleTime: 15_000,
-    gcTime: 5 * 60_000,
-    retry: 0,
-  });
+  const query = useArrivalsQuery(
+    line.codigo,
+    stop.identificador,
+    stop.abreviaturaBandera
+  );
 
   // --- Animated spin for the refresh icon ---
   const rotation = useSharedValue(0);

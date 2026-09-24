@@ -15,7 +15,7 @@ export type ProblemFieldError = {
   message: string;
 };
 
-export type TelemetryStatus = 'LIVE' | 'ESTIMATED_FALLBACK' | 'EXPIRED' | 'UNAVAILABLE';
+export type TelemetryStatus = 'LIVE' | 'ESTIMATED_FALLBACK' | 'EXPIRED' | 'UNAVAILABLE' | 'DELEGATED_TO_CLIENT';
 
 export type BusArrival = {
   lineCode: string | null;

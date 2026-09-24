@@ -1,9 +1,7 @@
 import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useQuery } from '@tanstack/react-query';
 
-import { getArrivals } from '@/src/features/transit/api';
 import { ArrivalDetail, TelemetryBadge } from '@/src/features/transit/arrival-ui';
 import {
   formatVisualArrivalMinutes,
@@ -11,7 +9,7 @@ import {
   getVisualRemainingMinutes,
   useArrivalClock,
 } from '@/src/features/transit/use-arrival-ticker';
-import { queryKeys } from '@/src/lib/query-client';
+import { useArrivalsQuery } from '@/src/services/mgp';
 import type { BusArrival, MapStopDirection } from '@/src/types/api';
 
 export function MapStopArrivals({
@@ -24,18 +22,11 @@ export function MapStopArrivals({
   stopIdentifier: string;
 }) {
   const now = useArrivalClock();
-  const arrivalsQuery = useQuery({
-    queryKey: queryKeys.telemetry.arrivals(
-      direction.nameTransitLine,
-      stopIdentifier,
-      direction.direction
-    ),
-    queryFn: ({ signal }) =>
-      getArrivals(direction.nameTransitLine, stopIdentifier, direction.direction, signal),
-    staleTime: 15_000,
-    gcTime: 5 * 60_000,
-    retry: 0,
-  });
+  const arrivalsQuery = useArrivalsQuery(
+    direction.nameTransitLine,
+    stopIdentifier,
+    direction.direction
+  );
   const arrivals = arrivalsQuery.data?.arrivals ?? [];
   return (
     <>

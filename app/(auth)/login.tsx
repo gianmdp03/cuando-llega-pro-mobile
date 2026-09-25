@@ -1,3 +1,4 @@
+import { Keyboard } from 'react-native';
 import { useMutation } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 
@@ -12,6 +13,7 @@ export default function LoginScreen() {
   const mutation = useMutation({
     mutationFn: login,
     onSuccess: async (response) => {
+      Keyboard.dismiss();
       await signIn(response);
       router.replace('/lines');
     },

@@ -15,47 +15,6 @@ const TARGET_URL = 'https://appsl.mardelplata.gob.ar/app_cuando_llega/webWS.php'
 // The directory route redirects to an external municipal 403 page. Keep the
 // resident document on the API origin so its clearance cookie is same-origin.
 const MGP_PAGE_URL = TARGET_URL;
-// Keep the known-good browser baseline enabled while the API-request failure is isolated.
-const MGP_CHALLENGE_PROBE_ENABLED = false;
-// Temporary baseline: this is intentionally a plain browser. It lets Cloudflare
-// own its full navigation without injected scripts, bridge messages, or MGP fetches.
-const MGP_PURE_CHALLENGE_BROWSER_ONLY = true;
-const PROBE_INJECTED_JAVASCRIPT = `
-(function() {
-  async function runProbe() {
-    try {
-      var response = await fetch('https://appsl.mardelplata.gob.ar/app_cuando_llega/webWS.php', {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Accept': 'application/json, text/javascript, */*; q=0.01',
-          'Accept-Language': 'es-AR,es;q=0.9,en;q=0.8',
-          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-          'X-Requested-With': 'XMLHttpRequest'
-        },
-        body: 'accion=RecuperarLineaPorCuandoLlega'
-      });
-      var body = await response.text();
-      window.ReactNativeWebView.postMessage(JSON.stringify({
-        type: 'PROBE_RESULT',
-        result: 'HTTP ' + response.status + ' | cf-mitigated=' + (response.headers.get('cf-mitigated') || '-') + ' | ' + body.slice(0, 180)
-      }));
-    } catch (error) {
-      window.ReactNativeWebView.postMessage(JSON.stringify({
-        type: 'PROBE_RESULT',
-        result: 'FETCH ERROR: ' + (error && error.name ? error.name + ': ' : '') + (error && error.message ? error.message : String(error)) + ' | page=' + location.href
-      }));
-    }
-  }
-  function receive(raw) {
-    try { if (JSON.parse(raw).type === 'RUN_PROBE') runProbe(); } catch (_) {}
-  }
-  window.addEventListener('message', function(event) { receive(event.data); });
-  document.addEventListener('message', function(event) { receive(event.data); });
-  window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'PROBE_READY' }));
-  true;
-})();
-`;
 // Cloudflare clearance is scoped to this origin, so solve challenges on a
 // renderable MGP page and issue API requests from the same resident WebView.
 const WEBVIEW_SOURCE = { uri: MGP_PAGE_URL };
@@ -63,14 +22,14 @@ const REQUEST_TIMEOUT_MS = 15000;
 // The former server proxy serialized municipal requests. Preserve that behavior
 // on-device: a burst of concurrent XHRs re-triggers MGP's Cloudflare rule.
 const REQUEST_PACING_MS = 6000;
-// Managed Challenges normally finish in a few seconds. Keep that path invisible and
-// only ask for user attention when Cloudflare has not cleared by this deadline.
-const AUTO_CHALLENGE_GRACE_MS = 7000;
+// Managed Challenges normally finish in a few seconds. Keep that path invisible for
+// 10 seconds and only ask for user attention when Cloudflare has not cleared by then.
+const PURE_CHALLENGE_GRACE_MS = 10000;
 
 interface PendingRequest {
   resolve: (data: string) => void;
   reject: (reason: Error) => void;
-  timeout: ReturnType<typeof setTimeout>;
+  timeout: ReturnType<typeof setTimeout> | null;
   message: {
     type: 'REQUEST';
     id: string;
@@ -269,10 +228,7 @@ export function MgpProvider({ children }: { children: React.ReactNode }) {
   const webViewRef = useRef<WebView>(null);
   const [isReady, setIsReady] = useState(false);
   const [isChallenging, setIsChallenging] = useState(false);
-  const [isChallengeVisible, setIsChallengeVisible] = useState(false);
-  const [isPureChallengeBrowserVisible, setIsPureChallengeBrowserVisible] = useState(true);
-  const [probeReady, setProbeReady] = useState(false);
-  const [probeResult, setProbeResult] = useState<string | null>(null);
+  const [isPureChallengeBrowserVisible, setIsPureChallengeBrowserVisible] = useState(false);
   const pendingRequests = useRef<Map<string, PendingRequest>>(new Map());
   const queuedRequestIds = useRef<string[]>([]);
   const activeRequestId = useRef<string | null>(null);
@@ -280,33 +236,29 @@ export function MgpProvider({ children }: { children: React.ReactNode }) {
   const bridgeReady = useRef(false);
   const bridgeOperational = useRef(false);
   const challengeActive = useRef(false);
-  const challengeVisibilityTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // A challenge page can remove its visible UI before Cloudflare completes the
-  // redirect. Do not treat that DOM transition as a clearance.
-  const awaitingChallengeClearance = useRef(false);
-  const readyDocumentId = useRef<string | null>(null);
-  const challengeDocumentId = useRef<string | null>(null);
-  const clearedChallengeDocumentId = useRef<string | null>(null);
   const pureChallengeDocumentLoaded = useRef(false);
   const pureChallengeRedirectStarted = useRef(false);
   const pureBridgeInjected = useRef(false);
   const pureChallengeSeen = useRef(false);
   const pureInitialLoadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pureVisibilityTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const clearChallengeVisibilityTimeout = useCallback(() => {
-    if (challengeVisibilityTimeout.current) {
-      clearTimeout(challengeVisibilityTimeout.current);
-      challengeVisibilityTimeout.current = null;
+  const clearPureVisibilityTimer = useCallback(() => {
+    if (pureVisibilityTimer.current) {
+      clearTimeout(pureVisibilityTimer.current);
+      pureVisibilityTimer.current = null;
     }
   }, []);
 
-  const deferChallengeVisibility = useCallback(() => {
-    if (challengeVisibilityTimeout.current) return;
-    challengeVisibilityTimeout.current = setTimeout(() => {
-      challengeVisibilityTimeout.current = null;
-      setIsChallengeVisible(true);
-    }, AUTO_CHALLENGE_GRACE_MS);
-  }, []);
+  const startPureVisibilityTimer = useCallback(() => {
+    clearPureVisibilityTimer();
+    pureVisibilityTimer.current = setTimeout(() => {
+      pureVisibilityTimer.current = null;
+      setIsPureChallengeBrowserVisible(true);
+    }, PURE_CHALLENGE_GRACE_MS);
+  }, [clearPureVisibilityTimer]);
+
+  const scheduleNextRequestRef = useRef<() => void>(() => {});
 
   const flushQueuedRequests = useCallback(() => {
     if (activeRequestId.current || !bridgeOperational.current || !webViewRef.current) return;
@@ -317,8 +269,25 @@ export function MgpProvider({ children }: { children: React.ReactNode }) {
     }
     if (!requestId) return;
 
+    const pending = pendingRequests.current.get(requestId);
+    if (!pending) return;
+
     activeRequestId.current = requestId;
-    webViewRef.current.postMessage(JSON.stringify(pendingRequests.current.get(requestId)!.message));
+
+    // Start the request timeout ONLY when the request is actually dispatched to the WebView
+    if (pending.timeout) {
+      clearTimeout(pending.timeout);
+    }
+    pending.timeout = setTimeout(() => {
+      pendingRequests.current.delete(requestId);
+      if (activeRequestId.current === requestId) {
+        activeRequestId.current = null;
+        scheduleNextRequestRef.current();
+      }
+      pending.reject(new Error(`Timeout (${REQUEST_TIMEOUT_MS / 1000}s) esperando respuesta de MGP`));
+    }, REQUEST_TIMEOUT_MS);
+
+    webViewRef.current.postMessage(JSON.stringify(pending.message));
   }, []);
 
   const scheduleNextRequest = useCallback(() => {
@@ -328,6 +297,8 @@ export function MgpProvider({ children }: { children: React.ReactNode }) {
       flushQueuedRequests();
     }, REQUEST_PACING_MS);
   }, [flushQueuedRequests]);
+
+  scheduleNextRequestRef.current = scheduleNextRequest;
 
   const activateBridge = useCallback(() => {
     if (!bridgeReady.current || challengeActive.current) return;
@@ -340,11 +311,13 @@ export function MgpProvider({ children }: { children: React.ReactNode }) {
   const activatePureChallengeBridge = useCallback(() => {
     if (pureBridgeInjected.current) return;
     pureBridgeInjected.current = true;
+    clearPureVisibilityTimer();
     setIsPureChallengeBrowserVisible(false);
+    setIsChallenging(false);
     // This runs only after native WebView events have confirmed the final page.
     // Cloudflare's challenge document never receives injected application code.
     webViewRef.current?.injectJavaScript(INJECTED_JAVASCRIPT);
-  }, []);
+  }, [clearPureVisibilityTimer]);
 
   const restartPureChallenge = useCallback(() => {
     // The document which observed the 403 contains our bridge. Reload it from
@@ -353,62 +326,34 @@ export function MgpProvider({ children }: { children: React.ReactNode }) {
     bridgeReady.current = false;
     bridgeOperational.current = false;
     challengeActive.current = false;
-    awaitingChallengeClearance.current = false;
     pureBridgeInjected.current = false;
     pureChallengeDocumentLoaded.current = false;
     pureChallengeRedirectStarted.current = false;
     pureChallengeSeen.current = false;
     if (pureInitialLoadTimer.current) clearTimeout(pureInitialLoadTimer.current);
     pureInitialLoadTimer.current = null;
+    clearPureVisibilityTimer();
     setIsReady(false);
     setIsChallenging(true);
-    setIsPureChallengeBrowserVisible(true);
+    setIsPureChallengeBrowserVisible(false);
+    startPureVisibilityTimer();
     webViewRef.current?.reload();
-  }, []);
-
-  const completeChallengeRedirect = useCallback(() => {
-    const readyDocument = readyDocumentId.current;
-    const challengeDocument = challengeDocumentId.current;
-
-    if (
-      !awaitingChallengeClearance.current ||
-      !readyDocument ||
-      !challengeDocument ||
-      readyDocument === challengeDocument ||
-      clearedChallengeDocumentId.current !== readyDocument
-    ) {
-      return;
-    }
-
-    awaitingChallengeClearance.current = false;
-    challengeDocumentId.current = null;
-    clearedChallengeDocumentId.current = null;
-    clearChallengeVisibilityTimeout();
-    setIsChallengeVisible(false);
-    challengeActive.current = false;
-    setIsChallenging(false);
-    activateBridge();
-  }, [activateBridge, clearChallengeVisibilityTimeout]);
-
-  const handleProbeMessage = useCallback((event: WebViewMessageEvent) => {
-    try {
-      const payload = JSON.parse(event.nativeEvent.data);
-      if (payload.type === 'PROBE_READY') setProbeReady(true);
-      if (payload.type === 'PROBE_RESULT') setProbeResult(String(payload.result));
-    } catch {
-      // Ignore page messages unrelated to the diagnostic probe.
-    }
-  }, []);
+  }, [clearPureVisibilityTimer, startPureVisibilityTimer]);
 
   // Handle hardware back press on Android when challenging overlay is open
   useEffect(() => {
-    if (!isChallengeVisible) return;
+    if (!isPureChallengeBrowserVisible) return;
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      setIsChallengeVisible(false);
+      setIsPureChallengeBrowserVisible(false);
       return true;
     });
     return () => subscription.remove();
-  }, [isChallengeVisible]);
+  }, [isPureChallengeBrowserVisible]);
+
+  // Start 10-second grace timer for initial load if Cloudflare is challenging
+  useEffect(() => {
+    startPureVisibilityTimer();
+  }, [startPureVisibilityTimer]);
 
   const handleMessage = useCallback(
     (event: WebViewMessageEvent) => {
@@ -417,43 +362,8 @@ export function MgpProvider({ children }: { children: React.ReactNode }) {
         if (!payload || !payload.type) return;
 
         if (payload.type === 'READY') {
-          // This confirms that the current document has installed its message
-          // listener. It is deliberately separate from Cloudflare clearance.
-          readyDocumentId.current =
-            typeof payload.documentId === 'string' ? payload.documentId : null;
           bridgeReady.current = true;
-          completeChallengeRedirect();
           activateBridge();
-          return;
-        }
-
-        if (payload.type === 'CF_STATUS' || payload.type === 'CHALLENGE_STATE') {
-          const challenging = Boolean(payload.isChallenging);
-          const documentId = typeof payload.documentId === 'string' ? payload.documentId : null;
-          if (challenging) {
-            if (!awaitingChallengeClearance.current) {
-              challengeDocumentId.current = documentId;
-            }
-            awaitingChallengeClearance.current = true;
-            clearedChallengeDocumentId.current = null;
-            challengeActive.current = true;
-            bridgeOperational.current = false;
-            setIsChallenging(true);
-            setIsReady(false);
-            deferChallengeVisibility();
-          } else if (awaitingChallengeClearance.current) {
-            // Cloudflare's spinner can temporarily remove the challenge markers.
-            // Keep requests suspended until a different, redirected document
-            // has loaded. A transient spinner state keeps the same document id.
-            clearedChallengeDocumentId.current = documentId;
-            completeChallengeRedirect();
-          } else {
-            clearChallengeVisibilityTimeout();
-            setIsChallengeVisible(false);
-            challengeActive.current = false;
-            setIsChallenging(false);
-            activateBridge();
-          }
           return;
         }
 
@@ -461,6 +371,11 @@ export function MgpProvider({ children }: { children: React.ReactNode }) {
           const requestId = String(payload.id || '');
           if (activeRequestId.current === requestId) {
             activeRequestId.current = null;
+            const pending = pendingRequests.current.get(requestId);
+            if (pending && pending.timeout) {
+              clearTimeout(pending.timeout);
+              pending.timeout = null;
+            }
             // Do not reject a request merely because its clearance expired.
             // It will run once the top-level challenge has redirected back.
             queuedRequestIds.current.unshift(requestId);
@@ -473,7 +388,10 @@ export function MgpProvider({ children }: { children: React.ReactNode }) {
           const { id, success, data, error } = payload;
           const pending = pendingRequests.current.get(id);
           if (pending) {
-            clearTimeout(pending.timeout);
+            if (pending.timeout) {
+              clearTimeout(pending.timeout);
+              pending.timeout = null;
+            }
             pendingRequests.current.delete(id);
             if (activeRequestId.current === id) {
               activeRequestId.current = null;
@@ -491,50 +409,36 @@ export function MgpProvider({ children }: { children: React.ReactNode }) {
         // Ignore unparseable messages from third-party scripts
       }
     },
-    [
-      activateBridge,
-      clearChallengeVisibilityTimeout,
-      completeChallengeRedirect,
-      deferChallengeVisibility,
-      restartPureChallenge,
-      scheduleNextRequest,
-    ]
+    [activateBridge, restartPureChallenge, scheduleNextRequest]
   );
 
-  const requestMgp = useCallback((params: Record<string, string>): Promise<string> => {
-    return new Promise<string>((resolve, reject) => {
-      const requestId = 'req_' + Math.random().toString(36).substring(2, 11) + '_' + Date.now();
+  const requestMgp = useCallback(
+    (params: Record<string, string>): Promise<string> => {
+      return new Promise<string>((resolve, reject) => {
+        const requestId = 'req_' + Math.random().toString(36).substring(2, 11) + '_' + Date.now();
 
-      const timeout = setTimeout(() => {
-        pendingRequests.current.delete(requestId);
-        if (activeRequestId.current === requestId) {
-          activeRequestId.current = null;
-          scheduleNextRequest();
-        }
-        reject(new Error(`Timeout (${REQUEST_TIMEOUT_MS / 1000}s) esperando respuesta de MGP`));
-      }, REQUEST_TIMEOUT_MS);
+        const message = {
+          type: 'REQUEST' as const,
+          id: requestId,
+          params,
+        };
 
-      const message = {
-        type: 'REQUEST' as const,
-        id: requestId,
-        params,
-      };
+        pendingRequests.current.set(requestId, {
+          resolve,
+          reject,
+          timeout: null,
+          message,
+        });
 
-      pendingRequests.current.set(requestId, {
-        resolve,
-        reject,
-        timeout,
-        message,
-      });
-
-      if (bridgeOperational.current && webViewRef.current) {
         queuedRequestIds.current.push(requestId);
-        flushQueuedRequests();
-        return;
-      }
-      queuedRequestIds.current.push(requestId);
-    });
-  }, []);
+
+        if (bridgeOperational.current && webViewRef.current) {
+          flushQueuedRequests();
+        }
+      });
+    },
+    [flushQueuedRequests]
+  );
 
   const getArrivals = useCallback(
     async (commercialLine: string, stopId: string): Promise<BusArrival[]> => {
@@ -550,154 +454,42 @@ export function MgpProvider({ children }: { children: React.ReactNode }) {
 
   const reloadBridge = useCallback(() => {
     setIsReady(false);
-    setIsChallenging(false);
-    setIsChallengeVisible(false);
-    awaitingChallengeClearance.current = false;
-    readyDocumentId.current = null;
-    challengeDocumentId.current = null;
-    clearedChallengeDocumentId.current = null;
+    setIsChallenging(true);
+    setIsPureChallengeBrowserVisible(false);
     bridgeReady.current = false;
     bridgeOperational.current = false;
     challengeActive.current = false;
+    pureBridgeInjected.current = false;
+    pureChallengeDocumentLoaded.current = false;
+    pureChallengeRedirectStarted.current = false;
+    pureChallengeSeen.current = false;
     activeRequestId.current = null;
     if (nextRequestTimer.current) {
       clearTimeout(nextRequestTimer.current);
       nextRequestTimer.current = null;
     }
-    clearChallengeVisibilityTimeout();
+    clearPureVisibilityTimer();
+    startPureVisibilityTimer();
     webViewRef.current?.reload();
-  }, [clearChallengeVisibilityTimeout]);
+  }, [clearPureVisibilityTimer, startPureVisibilityTimer]);
 
   // Cleanup on unmount
   useEffect(() => {
     const activeRequests = pendingRequests.current;
     return () => {
       activeRequests.forEach((req) => {
-        clearTimeout(req.timeout);
+        if (req.timeout) {
+          clearTimeout(req.timeout);
+        }
         req.reject(new Error('MGP Provider desmontado'));
       });
       activeRequests.clear();
       queuedRequestIds.current = [];
       if (nextRequestTimer.current) clearTimeout(nextRequestTimer.current);
       if (pureInitialLoadTimer.current) clearTimeout(pureInitialLoadTimer.current);
-      clearChallengeVisibilityTimeout();
+      clearPureVisibilityTimer();
     };
-  }, [clearChallengeVisibilityTimeout]);
-
-  if (MGP_CHALLENGE_PROBE_ENABLED) {
-    return (
-      <MgpContext.Provider
-        value={{
-          getArrivals,
-          requestMgp,
-          requestArrivals: getArrivals,
-          isReady: false,
-          isChallenging: false,
-          reloadBridge,
-        }}>
-        {children}
-        <View style={styles.challengeProbe}>
-          <WebView
-            ref={webViewRef}
-            source={WEBVIEW_SOURCE}
-            injectedJavaScript={PROBE_INJECTED_JAVASCRIPT}
-            onMessage={handleProbeMessage}
-            javaScriptEnabled={true}
-            domStorageEnabled={true}
-            thirdPartyCookiesEnabled={true}
-          />
-          <SafeAreaView style={styles.probeControls} pointerEvents="box-none">
-            <TouchableOpacity
-              disabled={!probeReady}
-              onPress={() => {
-                setProbeResult(null);
-                webViewRef.current?.postMessage(JSON.stringify({ type: 'RUN_PROBE' }));
-              }}
-              style={styles.probeButton}>
-              <Text style={styles.probeButtonText}>Probar API MGP</Text>
-            </TouchableOpacity>
-            {probeResult ? <Text style={styles.probeResult}>{probeResult}</Text> : null}
-          </SafeAreaView>
-        </View>
-      </MgpContext.Provider>
-    );
-  }
-
-  if (MGP_PURE_CHALLENGE_BROWSER_ONLY) {
-    return (
-      <MgpContext.Provider
-        value={{
-          getArrivals,
-          requestMgp,
-          requestArrivals: getArrivals,
-          isReady,
-          isChallenging,
-          reloadBridge,
-        }}>
-        {children}
-        <View
-          pointerEvents={isPureChallengeBrowserVisible ? 'auto' : 'none'}
-          style={
-            isPureChallengeBrowserVisible ? styles.pureChallengeBrowser : styles.headlessContainer
-          }>
-          <WebView
-            ref={webViewRef}
-            source={WEBVIEW_SOURCE}
-            onMessage={handleMessage}
-            onHttpError={(event) => {
-              // Cloudflare serves its challenge with HTTP 403. This native event
-              // is outside the page, so it does not modify or fingerprint it.
-              if (event.nativeEvent.statusCode === 403) {
-                pureChallengeSeen.current = true;
-                if (pureInitialLoadTimer.current) {
-                  clearTimeout(pureInitialLoadTimer.current);
-                  pureInitialLoadTimer.current = null;
-                }
-              }
-            }}
-            onLoadStart={() => {
-              // The first document is Cloudflare's challenge. A later top-level
-              // navigation is Cloudflare's own redirect after it has cleared.
-              if (pureChallengeDocumentLoaded.current) {
-                pureChallengeRedirectStarted.current = true;
-              }
-            }}
-            onLoadEnd={() => {
-              if (!pureChallengeDocumentLoaded.current) {
-                pureChallengeDocumentLoaded.current = true;
-                // A persisted cf_clearance skips the challenge entirely: the
-                // endpoint simply loads once and remains visually blank. Give
-                // the native 403 callback a moment before treating it as final.
-                pureInitialLoadTimer.current = setTimeout(() => {
-                  pureInitialLoadTimer.current = null;
-                  if (!pureChallengeSeen.current && !pureChallengeRedirectStarted.current) {
-                    activatePureChallengeBridge();
-                  }
-                }, 750);
-                return;
-              }
-
-              if (pureChallengeRedirectStarted.current) {
-                if (pureInitialLoadTimer.current) {
-                  clearTimeout(pureInitialLoadTimer.current);
-                  pureInitialLoadTimer.current = null;
-                }
-                activatePureChallengeBridge();
-              }
-            }}
-            javaScriptEnabled={true}
-            domStorageEnabled={true}
-            thirdPartyCookiesEnabled={true}
-            sharedCookiesEnabled={true}
-            cacheEnabled={true}
-            incognito={false}
-            originWhitelist={['*']}
-            style={styles.webViewStyle}
-          />
-        </View>
-      </MgpContext.Provider>
-    );
-  }
+  }, [clearPureVisibilityTimer]);
 
   return (
     <MgpContext.Provider
@@ -710,16 +502,12 @@ export function MgpProvider({ children }: { children: React.ReactNode }) {
         reloadBridge,
       }}>
       {children}
-
-      {/*
-        Single persistent WebView:
-        NEVER unmounted so that the Chromium session, cookies (cf_clearance),
-        DOM state, and JavaScript context are permanently preserved.
-      */}
       <View
-        pointerEvents={isChallengeVisible ? 'auto' : 'none'}
-        style={isChallengeVisible ? styles.challengingOverlay : styles.headlessContainer}>
-        {isChallengeVisible && (
+        pointerEvents={isPureChallengeBrowserVisible ? 'auto' : 'none'}
+        style={
+          isPureChallengeBrowserVisible ? styles.pureChallengeBrowser : styles.headlessContainer
+        }>
+        {isPureChallengeBrowserVisible && (
           <SafeAreaView style={styles.modalHeader}>
             <View style={styles.headerTextContainer}>
               <Text style={styles.modalTitle}>Verificación de seguridad MGP</Text>
@@ -730,35 +518,66 @@ export function MgpProvider({ children }: { children: React.ReactNode }) {
             </View>
             <TouchableOpacity
               style={styles.closeButton}
-              onPress={() => setIsChallengeVisible(false)}>
+              onPress={() => setIsPureChallengeBrowserVisible(false)}>
               <Text style={styles.closeButtonText}>Cerrar</Text>
             </TouchableOpacity>
           </SafeAreaView>
         )}
+        <WebView
+          ref={webViewRef}
+          source={WEBVIEW_SOURCE}
+          onMessage={handleMessage}
+          onHttpError={(event) => {
+            // Cloudflare serves its challenge with HTTP 403. This native event
+            // is outside the page, so it does not modify or fingerprint it.
+            if (event.nativeEvent.statusCode === 403) {
+              pureChallengeSeen.current = true;
+              if (pureInitialLoadTimer.current) {
+                clearTimeout(pureInitialLoadTimer.current);
+                pureInitialLoadTimer.current = null;
+              }
+            }
+          }}
+          onLoadStart={() => {
+            // The first document is Cloudflare's challenge. A later top-level
+            // navigation is Cloudflare's own redirect after it has cleared.
+            if (pureChallengeDocumentLoaded.current) {
+              pureChallengeRedirectStarted.current = true;
+            }
+          }}
+          onLoadEnd={() => {
+            if (!pureChallengeDocumentLoaded.current) {
+              pureChallengeDocumentLoaded.current = true;
+              // A persisted cf_clearance skips the challenge entirely: the
+              // endpoint simply loads once and remains visually blank. Give
+              // the native 403 callback a moment before treating it as final.
+              pureInitialLoadTimer.current = setTimeout(() => {
+                pureInitialLoadTimer.current = null;
+                if (!pureChallengeSeen.current && !pureChallengeRedirectStarted.current) {
+                  activatePureChallengeBridge();
+                }
+              }, 750);
+              return;
+            }
 
-        <View style={isChallengeVisible ? styles.webViewActiveContainer : styles.webViewHidden}>
-          <WebView
-            ref={webViewRef}
-            source={WEBVIEW_SOURCE}
-            injectedJavaScript={INJECTED_JAVASCRIPT}
-            onMessage={handleMessage}
-            onLoadStart={() => {
-              bridgeReady.current = false;
-              bridgeOperational.current = false;
-              setIsReady(false);
-            }}
-            javaScriptEnabled={true}
-            domStorageEnabled={true}
-            thirdPartyCookiesEnabled={true}
-            sharedCookiesEnabled={true}
-            cacheEnabled={true}
-            incognito={false}
-            originWhitelist={['*']}
-            style={styles.webViewStyle}
-          />
-        </View>
-
-        {isChallengeVisible && (
+            if (pureChallengeRedirectStarted.current) {
+              if (pureInitialLoadTimer.current) {
+                clearTimeout(pureInitialLoadTimer.current);
+                pureInitialLoadTimer.current = null;
+              }
+              activatePureChallengeBridge();
+            }
+          }}
+          javaScriptEnabled={true}
+          domStorageEnabled={true}
+          thirdPartyCookiesEnabled={true}
+          sharedCookiesEnabled={true}
+          cacheEnabled={true}
+          incognito={false}
+          originWhitelist={['*']}
+          style={styles.webViewStyle}
+        />
+        {isPureChallengeBrowserVisible && (
           <View style={styles.modalFooter}>
             <ActivityIndicator size="small" color="#0284c7" />
             <Text style={styles.modalFooterText}>
@@ -772,38 +591,6 @@ export function MgpProvider({ children }: { children: React.ReactNode }) {
 }
 
 const styles = StyleSheet.create({
-  probeControls: {
-    position: 'absolute',
-    right: 12,
-    bottom: 12,
-    left: 12,
-    gap: 8,
-  },
-  probeButton: {
-    alignSelf: 'center',
-    borderRadius: 10,
-    backgroundColor: '#075985',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-  },
-  probeButtonText: { color: '#ffffff', fontWeight: '700' },
-  probeResult: {
-    borderRadius: 8,
-    backgroundColor: '#ffffff',
-    color: '#111827',
-    padding: 10,
-    fontSize: 12,
-  },
-  challengeProbe: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    backgroundColor: '#ffffff',
-    zIndex: 999999,
-    elevation: 999999,
-  },
   pureChallengeBrowser: {
     position: 'absolute',
     top: 0,
@@ -822,24 +609,6 @@ const styles = StyleSheet.create({
     left: 0,
     opacity: 0,
     zIndex: -1,
-  },
-  challengingOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: '#ffffff',
-    zIndex: 999999,
-    elevation: 999999,
-  },
-  webViewHidden: {
-    flex: 1,
-    opacity: 0,
-  },
-  webViewActiveContainer: {
-    flex: 1,
-    backgroundColor: '#ffffff',
   },
   webViewStyle: {
     flex: 1,

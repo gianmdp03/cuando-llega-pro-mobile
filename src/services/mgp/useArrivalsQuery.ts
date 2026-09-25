@@ -38,9 +38,7 @@ export function useArrivalsQuery(
   const { getArrivals, isReady, isChallenging, reloadBridge } = useMgp();
 
   const isEnabled = Boolean(
-    lineCode &&
-    stopId &&
-    (options?.enabled === undefined ? true : options.enabled)
+    lineCode && stopId && (options?.enabled === undefined ? true : options.enabled)
   );
 
   const query = useQuery<ArrivalResponseDTO, Error>({
@@ -51,8 +49,9 @@ export function useArrivalsQuery(
         // freshness window as this query and avoids waking MGP for refresh spam.
         return await getCachedArrivals(lineCode!, stopId!, bandera ?? null, signal);
       } catch (error) {
-        const requiresClientRefresh = error instanceof ProblemDetailError
-          && error.problem.type === 'urn:cuando-llega:mgp-client-refresh-required';
+        const requiresClientRefresh =
+          error instanceof ProblemDetailError &&
+          error.problem.type === 'urn:cuando-llega:mgp-client-refresh-required';
         if (!requiresClientRefresh) throw error;
       }
 
@@ -91,7 +90,14 @@ export function useArrivalsQuery(
         stopLatitude: firstWithCoords?.stopLatitude ?? items[0]?.stopLatitude ?? null,
         stopLongitude: firstWithCoords?.stopLongitude ?? items[0]?.stopLongitude ?? null,
       };
-      await refreshArrivalsCache(response);
+      try {
+        const consolidated = await refreshArrivalsCache(response);
+        if (consolidated && Array.isArray(consolidated.arrivals)) {
+          return consolidated;
+        }
+      } catch {
+        // Degrade gracefully to local raw snapshot if backend is unreachable
+      }
       return response;
     },
     enabled: isEnabled,
@@ -100,7 +106,8 @@ export function useArrivalsQuery(
     // Cloudflare owns the verification flow. Retrying while it is active restarts
     // the challenge navigation and produces a loop.
     retry: false,
-    refetchInterval: options?.refetchInterval ?? false,
+    refetchInterval: options?.refetchInterval !== undefined ? options.refetchInterval : 30_000,
+    refetchIntervalInBackground: false,
     select: (response): ArrivalResponseDTO => ({
       ...response,
       branch: bandera ?? null,

@@ -71,9 +71,13 @@ export function getArrivals(
   });
 }
 
-/** Publishes a normalized on-device MGP snapshot into the backend's 15-second L1 cache. */
-export function refreshArrivalsCache(snapshot: ArrivalResponseDTO): Promise<void> {
-  return apiClient.post<void, ArrivalResponseDTO>('/api/v1/telemetry/arrivals-cache', snapshot, {
-    timeoutMs: MGP_PACED_TIMEOUT_MS,
-  });
+/** Publishes a normalized on-device MGP snapshot into the backend's 15-second L1 cache and returns consolidated telemetry. */
+export function refreshArrivalsCache(snapshot: ArrivalResponseDTO): Promise<ArrivalResponseDTO> {
+  return apiClient.post<ArrivalResponseDTO, ArrivalResponseDTO>(
+    '/api/v1/telemetry/arrivals-cache',
+    snapshot,
+    {
+      timeoutMs: MGP_PACED_TIMEOUT_MS,
+    }
+  );
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Keyboard,
   KeyboardAvoidingView,
@@ -24,8 +24,10 @@ type AuthFormProps = {
 export function AuthForm({ error, isSubmitting, onSubmit }: AuthFormProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const passwordRef = useRef<TextInput>(null);
 
   function submit(): void {
+    Keyboard.dismiss();
     onSubmit({
       email: email.trim(),
       password,
@@ -60,14 +62,19 @@ export function AuthForm({ error, isSubmitting, onSubmit }: AuthFormProps) {
                 keyboardType="email-address"
                 label="Email"
                 onChangeText={setEmail}
+                onSubmitEditing={() => passwordRef.current?.focus()}
+                returnKeyType="next"
                 value={email}
               />
               <Field
                 autoCapitalize="none"
                 autoComplete="current-password"
                 icon="lock-outline"
+                inputRef={passwordRef}
                 label="Contraseña"
                 onChangeText={setPassword}
+                onSubmitEditing={submit}
+                returnKeyType="done"
                 secureTextEntry
                 value={password}
               />
@@ -100,19 +107,28 @@ export function AuthForm({ error, isSubmitting, onSubmit }: AuthFormProps) {
 
 type FieldProps = Pick<
   React.ComponentProps<typeof TextInput>,
-  'autoCapitalize' | 'autoComplete' | 'keyboardType' | 'onChangeText' | 'secureTextEntry' | 'value'
+  | 'autoCapitalize'
+  | 'autoComplete'
+  | 'keyboardType'
+  | 'onChangeText'
+  | 'onSubmitEditing'
+  | 'returnKeyType'
+  | 'secureTextEntry'
+  | 'value'
 > & {
   icon: React.ComponentProps<typeof MaterialCommunityIcons>['name'];
   label: string;
+  inputRef?: React.RefObject<TextInput | null>;
 };
 
-function Field({ icon, label, ...inputProps }: FieldProps) {
+function Field({ icon, label, inputRef, ...inputProps }: FieldProps) {
   return (
     <View>
       <Text className="mb-2 text-sm text-[#A4A4AB]">{label}</Text>
       <View className="flex-row items-center rounded-xl bg-[#25252B] px-3">
         <MaterialCommunityIcons color="#A4A4AB" name={icon} size={20} />
         <TextInput
+          ref={inputRef}
           className="ml-3 min-h-12 flex-1 text-base text-[#E1E1E6]"
           placeholder={label}
           placeholderTextColor="#8E8E93"

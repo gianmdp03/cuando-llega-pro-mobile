@@ -325,7 +325,8 @@ function StopsStep({
   const catalog = useTransitCatalog();
   const query = useQuery({
     queryKey: queryKeys.catalog.stopsWithFlags(line.codigo, street.codigo, intersection.codigo),
-    queryFn: ({ signal }) => catalog.stopsWithFlag(line.codigo, street.codigo, intersection.codigo, signal),
+    queryFn: ({ signal }) =>
+      catalog.stopsWithFlag(line.codigo, street.codigo, intersection.codigo, signal),
     ...CATALOG_OPTIONS,
   });
 
@@ -444,11 +445,7 @@ function ArrivalsStep({
 }) {
   const [isSaving, setIsSaving] = useState(false);
   const [isMapVisible, setIsMapVisible] = useState(false);
-  const query = useArrivalsQuery(
-    line.codigo,
-    stop.identificador,
-    stop.abreviaturaBandera
-  );
+  const query = useArrivalsQuery(line.codigo, stop.identificador, stop.abreviaturaBandera);
 
   // --- Animated spin for the refresh icon ---
   const rotation = useSharedValue(0);

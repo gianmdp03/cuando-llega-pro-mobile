@@ -72,7 +72,9 @@ export function extrapolateArrivalResponse(
   response: ArrivalResponse,
   currentTime: Date = new Date()
 ): ArrivalResponse {
-  const refTime = response.timestamp ? new Date(response.timestamp).getTime() : currentTime.getTime();
+  const refTime = response.timestamp
+    ? new Date(response.timestamp).getTime()
+    : currentTime.getTime();
   const elapsedMinutes = Math.floor(Math.max(0, currentTime.getTime() - refTime) / 60000);
 
   let targetStatus = response.status;
@@ -100,22 +102,25 @@ export function extrapolateArrivalResponse(
  * React hook providing 1-second countdown extrapolation without aggressive network polling.
  */
 export function useExtrapolatedArrivals(items: BusArrivalItem[] | undefined): ExtrapolatedItem[] {
+  const [prevItems, setPrevItems] = useState(items);
   const [extrapolated, setExtrapolated] = useState<ExtrapolatedItem[]>(() =>
     items ? extrapolateArrivalsList(items) : []
   );
 
+  if (items !== prevItems) {
+    setPrevItems(items);
+    setExtrapolated(items && items.length > 0 ? extrapolateArrivalsList(items) : []);
+  }
+
   useEffect(() => {
     if (!items || items.length === 0) {
-      setExtrapolated([]);
       return;
     }
 
-    const tick = () => {
+    const interval = setInterval(() => {
       setExtrapolated(extrapolateArrivalsList(items));
-    };
+    }, 1000);
 
-    tick();
-    const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
   }, [items]);
 

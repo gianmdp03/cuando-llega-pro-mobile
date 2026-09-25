@@ -9,7 +9,7 @@ import {
   parseMgpArrivals,
   parseMgpResponse,
 } from './telemetryMapper';
-import { extrapolateArrivalItem, extrapolateArrivalsList } from './extrapolationEngine';
+import { extrapolateArrivalItem } from './extrapolationEngine';
 
 describe('MGP Telemetry Mapper', () => {
   it('correctly maps commercial line codes to internal codes and back', () => {
